@@ -11,73 +11,114 @@
  * the fpu must be properly saved/resored. This hasn't been tested.
  */
 
+/*
+ * asm.s 包含大部分的硬件故障（或出错）处理的低层次代码
+ * 页异常由 mm/page.s 处理，所以不在这里
+*/
+
+	# 本代码主要针对 intel 保留中断 int 0 ~ int16 的处理 （int 17 ~ int 31 留作今后使用）
+	# 以下是一些全局函数名的声明，其原型在 trap.c 中声明
 .globl divide_error,debug,nmi,int3,overflow,bounds,invalid_op
 .globl double_fault,coprocessor_segment_overrun
 .globl invalid_TSS,segment_not_present,stack_segment
 .globl general_protection,coprocessor_error,irq13,reserved
 
+	#int 0 -- 处理被零除出错的情况。 类型：错误，出错号：无
+	# 在执行 div 或 idiv 指令时，若除数是 0，CPU就会产生这个异常
+	# 当 EAX(AX, AL) 包含不了一个合法除操作结果时， 也会产生这个异常
+	# 标号 '$do_divide_error' 实际上是C语言函数do_divide_error()编译后生成的模块中的对应的名称，
+	# 函数 ''do_divide_error' 在 traps.c 中实现
 divide_error:
-	pushl $do_divide_error
+	pushl $do_divide_error # 首先把将要调用的函数地址入栈，这里的栈是用户进程的内核态的堆栈，不是用户进程的用户态使用的堆栈！！！
+	# 下面这段程序统一处理无出错号的情况
+	# 注意，参数入栈，栈顶指针 esp 减小！！！
+	#      参数出栈，栈顶指针 esp 增加！！！ 
 no_error_code:
-	xchgl %eax,(%esp)
-	pushl %ebx
+	# 注意：用户进程的用户态下的原SS, 原ESP, 原 eflags, 原 cs, 原 eip 已经被保存在用户进程的内核栈上！！！
+	xchgl %eax,(%esp) # _do_divide_error -> eax, 原eax 被交换入栈
+	pushl %ebx # ebx, ecx, edx, edi, esi, ebp 依次入栈（这些寄存器都是用户进程的内核态时候的值）
 	pushl %ecx
 	pushl %edx
 	pushl %edi
 	pushl %esi
 	pushl %ebp
-	push %ds
-	push %es
+	push %ds # !! 16位的段寄存器入栈也要占用4个字节
+	push %es # ds, es, fs 依次入栈
 	push %fs
-	pushl $0		# "error code"
-	lea 44(%esp),%edx
-	pushl %edx
-	movl $0x10,%edx
-	mov %dx,%ds
-	mov %dx,%es
-	mov %dx,%fs
-	call *%eax
-	addl $8,%esp
-	pop %fs
+	# do_divide_error(long esp, long error_code) 下面依次把 error_code 和 esp 作为调用的参数入栈
+	# 注意：参数入栈的顺序是和参数声明的顺序正好相反 !!! 
+	pushl $0		# "error code" 将数值 0 作为错误码入栈 (error_code 参数入栈)
+	# lea 相当于 C 语言中的 & ，取地址的意思
+	lea 44(%esp),%edx # 把 (esp + 44) 的地址加载到 edx 寄存器，这个地址是“中断结束后返回的地址” (esp0 参数入栈)    
+	pushl %edx # 中断返回后的地址，压入堆栈
+	movl $0x10,%edx # edx = 0x10 (内核数据段选择符号)
+	mov %dx,%ds # ds = 0x10 
+	mov %dx,%es # es = 0x10 
+	mov %dx,%fs # fs = 0x10
+	# * 类似于 C 语言的 获取指针内容的含义
+	call *%eax # 把 eax 中的内容作为函数调用的地址，实际上就是调用 do_divide_error(esp, error_code)
+	addl $8,%esp # 调用完毕后，前面入栈的两个参数 error_code 和 esp 已经没用，直接抛弃掉，栈顶指针 + 8 
+	pop %fs # 依次恢复入栈的 fs, es, ds 寄存器
 	pop %es
 	pop %ds
-	popl %ebp
+	popl %ebp # 依次恢复入栈的 ebp, esi, edi, edx, ecx, ebx, eax 寄存器
 	popl %esi
 	popl %edi
 	popl %edx
 	popl %ecx
 	popl %ebx
 	popl %eax
-	iret
+	iret # 中断返回，最初保存的eip, cs, eflags, esp, ss 依次出栈恢复
+	# 注意这里不仅有特权级变化，还有堆栈变化（用户进程内核态的内核堆栈 -> 用户进程的用户态堆栈）！！！
 
+	# int 1 -- debug 调试中断入口。类型：错误/陷阱，出错号：无
+	# 当 eflags 的 TF 位置位时引发的中断：
+	# 当发现硬件断点，或 开启了指令跟踪陷阱，或 任务交换陷阱，或 调试器访问寄存器无效（错误） 
 debug:
 	pushl $do_int3		# _do_debug
 	jmp no_error_code
 
+	# int 2 -- 非屏蔽中断调用入口。类型：陷阱，错误号：无
+	# 仅有的被赋予固定中断号的硬件中断。每当接受到一个 nmi 信号，CPU立刻产生中断向量 2，并执行相应的中断过程，因此很节约时间
+	# NMI 通常保留为极为重要的硬件事件使用，当收到并且执行中断处理过程后，会忽略所有其后的硬件中断
 nmi:
 	pushl $do_nmi
 	jmp no_error_code
 
+	# int 3 -- 断点指令引发的中断。类型：陷阱，错误号：无
+	# 调试器插入被调试程序的代码中
 int3:
 	pushl $do_int3
 	jmp no_error_code
 
+	# int 4 -- 溢出出错中断处理入口。类型：陷阱，错误号：无
+	# EFLAGS 的 OF 位被置位时 CPU 执行 INTO 指令时候触发
+	# 通常被用于编译器跟踪算术计算溢出
 overflow:
 	pushl $do_overflow
 	jmp no_error_code
 
+	# int 5 -- 边界检查出错中断入口。类型：错误，错误号：无
+	# 当操作数在有效范围以外时候触发的中断，当 BOUND 指令测试失败则会触发
+	# BOUND 指令有 3个操作数，如果第一个不在后两个之间，被认为测试失败
 bounds:
 	pushl $do_bounds
 	jmp no_error_code
 
+	# int 6 -- 无效指令出错中断入口。类型：错误，错误号：无
+	# CPU 检测到一个无效的操作码
 invalid_op:
 	pushl $do_invalid_op
 	jmp no_error_code
 
+	# int 7 -- 协处理器段超出中断入口。类型：错误，错误号：无
+	# 等同于协处理器出错保护，在浮点指令操作过大时，有机会来加载或保存超出数据段的浮点值
 coprocessor_segment_overrun:
 	pushl $do_coprocessor_segment_overrun
 	jmp no_error_code
 
+	# int 15 -- 保留中断的入口。类型：无，错误号：无
+	# 保留给未来使用
 reserved:
 	pushl $do_reserved
 	jmp no_error_code
