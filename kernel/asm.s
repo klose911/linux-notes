@@ -49,8 +49,8 @@ no_error_code:
 	# 注意：参数入栈的顺序是和参数声明的顺序正好相反 !!! 
 	pushl $0		# "error code" 将数值 0 作为错误码入栈 (error_code 参数入栈)
 	# lea 相当于 C 语言中的 & ，取地址的意思
-	lea 44(%esp),%edx # 把 (esp + 44) 的地址加载到 edx 寄存器，这个地址是“中断结束后返回的地址” (esp0 参数入栈)    
-	pushl %edx # 中断返回后的地址，压入堆栈
+	lea 44(%esp),%edx # 把 (esp + 44) 的地址加载到 edx 寄存器，这个地址是“中断结束后返回的地址”     
+	pushl %edx # 中断返回后的地址，压入堆栈 (esp0 参数入栈) 
 	movl $0x10,%edx # edx = 0x10 (内核数据段选择符号)
 	mov %dx,%ds # ds = 0x10 
 	mov %dx,%es # es = 0x10 
@@ -123,64 +123,82 @@ reserved:
 	pushl $do_reserved
 	jmp no_error_code
 
+	# int 45(0x20 + 13) -- 数学协处理器硬件中断
+	# 80387 在执行计算时，CPU 会等待其计算完成
+	# 当协处理器执行完一个操作时，就会发出 IRQ 13 中断信号，以通知 CPU 操作完成。
 irq13:
-	pushl %eax
-	xorb %al,%al
-	outb %al,$0xF0
+	pushl %eax 
+	xorb %al,%al # 0xF0 是协处理器端口，用于清忙锁存器。通过写端口，消除 CPU 的 BUSY 延续信号，并重新激活 80387 的扩展请求引脚 PEREQ
+	outb %al,$0xF0 # 该操作主要是为了确保再继续执行 80387 的任何指令前， CPU 响应本中断
 	movb $0x20,%al
-	outb %al,$0x20
-	jmp 1f
+	outb %al,$0x20 # 向 8259 主中断控制芯片发送 EOI （中断结束） 信号
+	jmp 1f # 这两个跳转指令起延时作用
 1:	jmp 1f
-1:	outb %al,$0xA0
+1:	outb %al,$0xA0 # 再向 8259 从中断控制芯片发送 EOI （中断结束） 信号
 	popl %eax
-	jmp coprocessor_error
+	jmp coprocessor_error # 该函数现在在 system_call.s 中
 
+	# int 8 -- 双出错故障。类型：放弃，出错号：有
+	# 通常当 CPU 在调用前一个异常的处理程序过程中又检测到一个新的异常时，一般这两个异常会被串行执行
+	# 但也有很少的情况，CPU 无法进行串行执行，这时候就会触发这个异常
 double_fault:
 	pushl $do_double_fault
+	# 以下中断在调用时 CPU 会在中断返回地址之后，再将出错号压入堆栈，因此返回时候也要将出错号弹出
 error_code:
-	xchgl %eax,4(%esp)		# error code <-> %eax
-	xchgl %ebx,(%esp)		# &function <-> %ebx
-	pushl %ecx
+	xchgl %eax,4(%esp)		# error code <-> %eax # eax 原来的值被保存在堆栈，error code 被交换到 eax 寄存器
+	xchgl %ebx,(%esp)		# &function <-> %ebx # ebx 原来的值被保存在堆栈，中断调用地址被保存到 ebx 寄存器
+	pushl %ecx # ecx, edx, edi, esi, ebp 依次压栈
 	pushl %edx
 	pushl %edi
 	pushl %esi
 	pushl %ebp
-	push %ds
+	push %ds # ds, es, fs 依次压栈
 	push %es
 	push %fs
-	pushl %eax			# error code
-	lea 44(%esp),%eax		# offset
-	pushl %eax
-	movl $0x10,%eax
-	mov %ax,%ds
-	mov %ax,%es
-	mov %ax,%fs
-	call *%ebx
-	addl $8,%esp
-	pop %fs
+	pushl %eax			# error code # error code 压栈（调用参数）
+	lea 44(%esp),%eax		# offset # 原来的 esp 地址 载入到 eax 寄存器
+	pushl %eax # 中断返回后的地址，压入堆栈 (esp0 参数入栈) 
+	movl $0x10,%eax # eax = 0x10 （内核段数据选择符）
+	mov %ax,%ds # ds = ax 
+	mov %ax,%es # es = ax 
+	mov %ax,%fs # fs = ax 
+	call *%ebx # 调用 do_double_fault(long esp, long error_code)
+	addl $8,%esp # 调用完毕后，前面入栈的两个参数 error_code 和 esp 已经没用，直接抛弃掉，栈顶指针 + 8
+	pop %fs # 依次恢复入栈的 fs, es, ds 寄存器
 	pop %es
 	pop %ds
-	popl %ebp
+	popl %ebp # 依次恢复入栈的 ebp, esi, edi, edx, ecx, ebx, eax 寄存器
 	popl %esi
 	popl %edi
 	popl %edx
 	popl %ecx
 	popl %ebx
 	popl %eax
-	iret
+	iret # 中断返回，最初保存的eip, cs, eflags, esp, ss 依次出栈恢复
+	# 注意这里不仅有特权级变化，还有堆栈变化（用户进程内核态的内核堆栈 -> 用户进程的用户态堆栈）！！！
 
+	# int 10 -- 无效的任务状态段 TSS 。类型：错误，出错号：有
+	# CPU 企图换到一个进程，而该进程的 TSS 无效
+	# 当由于 TSS 长度超过 104 字节时，这个异常在当前任务中产生，导致切换被终止，反之则在切换后的新任务中产生该异常
 invalid_TSS:
 	pushl $do_invalid_TSS
 	jmp error_code
 
+	# int 11 -- 段不存在。类型：错误，出错号：有
+	# 被引用的段不存在。段描述符中的标志着段不在内存中
 segment_not_present:
 	pushl $do_segment_not_present
 	jmp error_code
 
+	# int 12 -- 堆栈段错误。类型：错误，出错号：有
+	# 指令操作试图超越堆栈段范围，或者堆栈段不在内存中
+	# 这是异常 11 和 13 的特例，有些操作系统可以利用这个异常来确定什么时候需要为程序分配更多的栈空间
 stack_segment:
 	pushl $do_stack_segment
 	jmp error_code
 
+	# int 13 -- 一般保护性出错。类型：错误，出错号：有
+	# 若一个异常出现时没有对应的处理向量(0 ~ 16)，通常就会归为此类
 general_protection:
 	pushl $do_general_protection
 	jmp error_code
