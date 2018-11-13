@@ -158,7 +158,16 @@ extern void wake_up(struct task_struct ** p);
 #define _LDT(n) ((((unsigned long) n)<<4)+(FIRST_LDT_ENTRY<<3))
 #define ltr(n) __asm__("ltr %%ax"::"a" (_TSS(n)))
 #define lldt(n) __asm__("lldt %%ax"::"a" (_LDT(n)))
-#define str(n) \
+
+/*
+ * 取当前运行进程的任务号（任务数组中的索引值，与进程号 pid 不同）
+ *
+ * 返回 n : 当前任务号
+ */
+// 1. 将任务寄存器中 TSS 段的值复制到 ax 寄存器
+// 2. (eax - FIRST_TSS_ENTRY * 8) -> eax
+// 3. (eax / 16) -> eax 这就是当前任务号 
+#define str(n)         \
 __asm__("str %%ax\n\t" \
 	"subl %2,%%eax\n\t" \
 	"shrl $4,%%eax" \
@@ -218,13 +227,16 @@ __asm__ ("push %%edx\n\t" \
 #define set_limit(ldt,limit) _set_limit( ((char *)&(ldt)) , (limit-1)>>12 )
 
 /**
+ * 从地址 addr 处获取描述符中的段基址
+ * 输出：edx - 存放段基址
+ * 输入：%1 - 地址 addr 偏移 2 ，%2 - 地址 addr 偏移 4 ， %3 - 地址 addr 偏移 7 
 #define _get_base(addr) ({\
 unsigned long __base; \
-__asm__("movb %3,%%dh\n\t" \
-	"movb %2,%%dl\n\t" \
-	"shll $16,%%edx\n\t" \
-	"movw %1,%%dx" \
-	:"=d" (__base) \
+__asm__("movb %3,%%dh\n\t" \  取[addr + 7] 处的基址高16位的高8位到（位 31～24） -> dh 寄存器 
+	"movb %2,%%dl\n\t" \  取[addr + 4] 处的基址高16位的低8位到（位 23～16） -> dl 寄存器
+	"shll $16,%%edx\n\t" \ 把基地址高16位移动到 edx 中高16位处
+	"movw %1,%%dx" \ 取 [addr + 2] 处的基址的低16位到（位 15 ~ 0） -> dx  
+	:"=d" (__base) \ 从而 edx 中含有 32 位的段基础地址
 	:"m" (*((addr)+2)), \
 	 "m" (*((addr)+4)), \
 	 "m" (*((addr)+7)) \
@@ -232,8 +244,10 @@ __asm__("movb %3,%%dh\n\t" \
 __base;})
 **/
 
+
 static inline unsigned long _get_base(char * addr)
 {
+      
          unsigned long __base;
          __asm__("movb %3,%%dh\n\t"
                  "movb %2,%%dl\n\t"
@@ -243,11 +257,19 @@ static inline unsigned long _get_base(char * addr)
                  :"m" (*((addr)+2)),
                   "m" (*((addr)+4)),
                   "m" (*((addr)+7)));
-         return __base;
+         return __base; 
 }
 
+/*
+ * 取局部描述符表中 ldt 所指段描述符中的基地址
+ */
 #define get_base(ldt) _get_base( ((char *)&(ldt)) )
 
+/* 取段选择符子 segment 指定的描述符中的段限长度值
+ * 指令 lsl是 load segment limit 的缩写：从指定的“段描述符”中取出分散的“限长比特位”拼成完整的段限长值放入指定的寄存器中
+ * 所得的段限长度，是实际字节数减 1，所以最后这里还得加上 1，才返回
+ * %0 -- 存放段长值（字节数）， %1 -- 段选择符 segment
+ */
 #define get_limit(segment) ({ \
 unsigned long __limit; \
 __asm__("lsll %1,%0\n\tincl %0":"=r" (__limit):"r" (segment)); \

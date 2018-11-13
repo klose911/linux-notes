@@ -93,28 +93,42 @@ void reserved(void);
 void parallel_interrupt(void);
 void irq13(void);
 
+/**
+ * 打印出错中断的名称，出错号，调用程序的 EIP, EFLAGS, ESP, fs 段寄存器，
+ * 段的基地址，段的长度，进程号 pid，任务号，10字节指令码。如果堆在用户栈，则
+ * 还打印16字节的堆栈内容。这些信息可用于程序调试
+ *
+ * str：出错信息
+ * esp_ptr: 堆栈指针
+ * nr: 中断号
+ */
 static void die(char * str,long esp_ptr,long nr)
 {
         long * esp = (long *) esp_ptr;
         int i;
 
         printk("%s: %04x\n\r",str,nr&0xffff);
+        // 下面打印语句显示当前调用进程的 CS:EIP，EFLAGS 和 SS:ESP
+        // EIP:\t%04x:%p\n -- esp[1] 是段选择符 cs , esp[0] 是 eip
+        // EFLAGS:\t%p\n -- esp[2] 是 原eflags
+        // ESP:\t%04x:%p\n -- esp[4] 是 原ss , esp[3] 是 原esp 
         printk("EIP:\t%04x:%p\nEFLAGS:\t%p\nESP:\t%04x:%p\n",
                esp[1],esp[0],esp[2],esp[4],esp[3]);
-        printk("fs: %04x\n",_fs());
+        printk("fs: %04x\n",_fs()); // 打印fs 段寄存器
+        // 打印 段基址，段长度
         printk("base: %p, limit: %p\n",get_base(current->ldt[1]),get_limit(0x17));
-        if (esp[4] == 0x17) {
-                printk("Stack: ");
+        if (esp[4] == 0x17) { // 如果原 ss 值为 0x17 用户栈
+                printk("Stack: "); // 打印出用户栈的4个长字值（16字节）
                 for (i=0;i<4;i++)
                         printk("%p ",get_seg_long(0x17,i+(long *)esp[3]));
                 printk("\n");
         }
-        str(i);
-        printk("Pid: %d, process nr: %d\n\r",current->pid,0xffff & i);
-        for(i=0;i<10;i++)
+        str(i); // 获得当前运行进程的任务号 
+        printk("Pid: %d, process nr: %d\n\r",current->pid,0xffff & i); // 打印当前进程的进程号，任务号
+        for(i=0;i<10;i++) // 打印10个指令字节码
                 printk("%02x ",0xff & get_seg_byte(esp[1],(i+(char *)esp[0])));
         printk("\n\r");
-        do_exit(11);		/* play segment exception */
+        do_exit(11);		/* play segment exception */ //返回错误11，结束进程
 }
 
 void do_double_fault(long esp, long error_code)
