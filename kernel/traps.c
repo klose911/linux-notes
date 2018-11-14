@@ -69,29 +69,29 @@
                         __asm__("mov %%fs,%%ax":"=a" (__res):); \
                         __res;})
 
-int do_exit(long code);
+int do_exit(long code); // 
 
-void page_exception(void);
+void page_exception(void); //页异常，实际是 page_default 
 
-void divide_error(void);
-void debug(void);
-void nmi(void);
-void int3(void);
-void overflow(void);
-void bounds(void);
-void invalid_op(void);
-void device_not_available(void);
-void double_fault(void);
-void coprocessor_segment_overrun(void);
-void invalid_TSS(void);
-void segment_not_present(void);
-void stack_segment(void);
-void general_protection(void);
-void page_fault(void);
-void coprocessor_error(void);
-void reserved(void);
-void parallel_interrupt(void);
-void irq13(void);
+void divide_error(void); // int 0 
+void debug(void); // int 1 
+void nmi(void); // int 2 
+void int3(void); // int3 
+void overflow(void); // int 4
+void bounds(void); // int 5 
+void invalid_op(void); // int 6 
+void device_not_available(void); // int 7 
+void double_fault(void); // int 8 
+void coprocessor_segment_overrun(void); // int 9
+void invalid_TSS(void); // int 10
+void segment_not_present(void); // int 11 
+void stack_segment(void); // int 12 
+void general_protection(void); // int 13 
+void page_fault(void); // int 14 
+void coprocessor_error(void); // int 16 
+void reserved(void); // int 15 
+void parallel_interrupt(void); // int 39
+void irq13(void); // int 45 协处理器中断处理 
 
 /**
  * 打印出错中断的名称，出错号，调用程序的 EIP, EFLAGS, ESP, fs 段寄存器，
@@ -131,6 +131,7 @@ static void die(char * str,long esp_ptr,long nr)
         do_exit(11);		/* play segment exception */ //返回错误11，结束进程
 }
 
+// 以下这些 do_ 开头的函数是 asm.s 中对应中断处理程序调用的 C 函数
 void do_double_fault(long esp, long error_code)
 {
         die("double fault",esp,error_code);
@@ -146,6 +147,7 @@ void do_divide_error(long esp, long error_code)
         die("divide error",esp,error_code);
 }
 
+// 参数是进入中断后被依次压入栈的寄存器的值，参见 asm.s 中的 
 void do_int3(long * esp, long error_code,
              long fs,long es,long ds,
              long ebp,long esi,long edi,
@@ -153,7 +155,8 @@ void do_int3(long * esp, long error_code,
 {
         int tr;
 
-        __asm__("str %%ax":"=a" (tr):"0" (0));
+        __asm__("str %%ax":"=a" (tr):"0" (0)); // 取任务寄存器值 -> tr 变量
+        // 依次打印被压栈的寄存器的值
         printk("eax\t\tebx\t\tecx\t\tedx\n\r%8x\t%8x\t%8x\t%8x\n\r",
                eax,ebx,ecx,edx);
         printk("esi\t\tedi\t\tebp\t\tesp\n\r%8x\t%8x\t%8x\t%8x\n\r",
