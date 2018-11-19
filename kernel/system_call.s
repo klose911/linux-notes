@@ -159,23 +159,32 @@ ret_from_sys_call:
 	pop %ds
 	iret # 中断返回
 
+	#### int 16 -- 处理器错误中断。类型：错误，无出错码
+	# 这是一个外部的基于硬件的异常，当协处理器检测到自己发生错误时，就会通过 ERROR 引脚通知 CPU
+	# 下面代码用于处理协处理器的出错信号，并跳转执行 C 函数 math_error() (kernel/math/math_emulate.c)
+	# 返回后跳转到标号 ret_from_sys_call 处继续执行
 .align 2
 coprocessor_error:
-	push %ds
+	push %ds # 寄存器压栈
 	push %es
 	push %fs
 	pushl %edx
 	pushl %ecx
 	pushl %ebx
 	pushl %eax
-	movl $0x10,%eax
-	mov %ax,%ds
-	mov %ax,%es
-	movl $0x17,%eax
-	mov %ax,%fs
-	pushl $ret_from_sys_call
+	movl $0x10,%eax # eax = $0x10 
+	mov %ax,%ds # ds = $0x10  ds, es 指向内核数据段 
+	mov %ax,%es # es = $0x10
+	movl $0x17,%eax # eax = 0x17 
+	mov %ax,%fs # fs = $0x17 fs 置为出错进程的数据段
+	pushl $ret_from_sys_call # math_error 调用完毕后的执行地址压栈
 	jmp math_error
 
+	#### int 7 -- 设备不存在或协处理器不存在。类型：错误，无出错码
+	# 1. 如果控制寄存器 CR0 中 EM (模拟)标志置位，则当 CPU 执行一个协处理器指令时就会引发该中断，这样 CPU 就有机会让这个中断程序模拟协处理器指令
+	# 2. CR0 中的 交换标志 TS 是在 CPU 执行任务交换时设置的，可以用来确定什么时候协处理中的内容和 CPU 正在执行的任务不匹配了，
+	#    当 CPU 在运行一个协处理器转移指令时，发现 TS 被置位时，就会引发该中断。此时就可以保存前一个任务的协处理内容，并恢复新任务的协处理状态
+	# 中断最后将转移到 ret_from_sys_call 处执行下去（检测并处理信号）
 .align 2
 device_not_available:
 	push %ds
@@ -191,24 +200,36 @@ device_not_available:
 	movl $0x17,%eax
 	mov %ax,%fs
 	pushl $ret_from_sys_call
+	# 清理 CR0 中的 TS 位（任务交换标志）
 	clts				# clear TS so that we can use math
-	movl %cr0,%eax
+	movl %cr0,%eax # cr0 -> eax
+	# 测试 CR0 中的 EM (模拟标志) 是否被置位
 	testl $0x4,%eax			# EM (math emulation bit)
+	# EM 没有置位，则恢复“协处理器”为“新任务状态”
 	je math_state_restore
-	pushl %ebp
+	# 若 EM 置位，则去执行 math_emulate (kernel/math/math_emulate.c) 
+	pushl %ebp # 为 math_emulate 进行参数压栈
 	pushl %esi
 	pushl %edi
-	call math_emulate
+	call math_emulate 
 	popl %edi
 	popl %esi
 	popl %ebp
-	ret
+	ret # 返回执行 ret_from_sys_call 
 
+	#### int 32 -- (int 0x20) 时间中断处理程序
+	# 中断频率设置为 100Hz(include/linux/sched.h)
+	# 定时芯片 8253/8254 是在 sched.c 初始化的。因此这里 jiffies 为 10毫秒加1，这段代码将 jiffies 加1，发送结束中断指令给 8259 控制器
+	# 然后用当前特权级作为参数调用 C 函数 do_timer(long CPL)。最后调用返回时检测并处理信号
 .align 2
 timer_interrupt:
+	# 保存 ds, es 和 fs 寄存器，并把 ds, es 指向 内核数据段
+	# fs 指向“被中断进程”的数据段，fs 会被 system_call 用到
 	push %ds		# save ds,es and put kernel data space
 	push %es		# into them. %fs is used by _system_call
 	push %fs
+	# 下面保存 eax, ecx, edx 寄存器，因为 gcc 编译器在调用函数时不会保存它们
+	# 这里也保存 ebx 寄存器，因为以后将在 ret_from_sys_call 时候使用到
 	pushl %edx		# we save %eax,%ecx,%edx as gcc doesn't
 	pushl %ecx		# save those across function calls. %ebx
 	pushl %ebx		# is saved as we use that in ret_sys_call
@@ -218,15 +239,17 @@ timer_interrupt:
 	mov %ax,%es
 	movl $0x17,%eax
 	mov %ax,%fs
-	incl jiffies
+	incl jiffies # jiffies 增1
+	# 由于初始化中断芯片的时候没有采用自动 EOI，所以这里必须手动发送指令来结束硬件中断
 	movb $0x20,%al		# EOI to interrupt controller #1
 	outb %al,$0x20
-	movl CS(%esp),%eax
-	andl $3,%eax		# %eax is CPL (0 or 3, 0=supervisor)
-	pushl %eax
+	movl CS(%esp),%eax # 从堆栈中取出"执行系统调用代码"的选择符（CS段寄存器）到 eax 寄存器
+	andl $3,%eax		# %eax is CPL (0 or 3, 0=supervisor) # 获得代码的运行级别，0: 特权级， 3: 用户级
+	pushl %eax # 特权级作为 do_timer 的调用参数压栈
+	# 调用 do_timer (kernel/sched.c) 中执行任务切换，计时等工作
 	call do_timer		# 'do_timer(long CPL)' does everything from
-	addl $4,%esp		# task switching to accounting ...
-	jmp ret_from_sys_call
+	addl $4,%esp		# task switching to accounting ... # 丢弃堆栈中不再需要的“特权级参数”
+	jmp ret_from_sys_call # 返回 ret_from_sys_call 
 
 .align 2
 sys_execve:
