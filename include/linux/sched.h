@@ -1,11 +1,11 @@
 #ifndef _SCHED_H
 #define _SCHED_H
 
-#define NR_TASKS 64
-#define HZ 100
+#define NR_TASKS 64 // 系统中最多同时的任务（进程）数
+#define HZ 100 // 定义系统时钟滴答频率（100Hz，每个滴答10ms）
 
-#define FIRST_TASK task[0]
-#define LAST_TASK task[NR_TASKS-1]
+#define FIRST_TASK task[0] // 任务0比较特殊，所以特意给他单独定义一个符号
+#define LAST_TASK task[NR_TASKS-1] // 任务数组中的最后一个
 
 #include <linux/head.h>
 #include <linux/fs.h>
@@ -16,42 +16,53 @@
 #error "Currently the close-on-exec-flags are in one word, max 32 files/proc"
 #endif
 
-#define TASK_RUNNING		0
-#define TASK_INTERRUPTIBLE	1
-#define TASK_UNINTERRUPTIBLE	2
-#define TASK_ZOMBIE		3
-#define TASK_STOPPED		4
+// 任务运行的状态值
+#define TASK_RUNNING		0 // 运行或就绪
+#define TASK_INTERRUPTIBLE	1 // 可中断等待状态
+#define TASK_UNINTERRUPTIBLE	2 // 不可中断等待状态，主要用于 I/O 操作等待
+#define TASK_ZOMBIE		3 // 僵死状态，实际已经停止，但是父进程还没发信号
+#define TASK_STOPPED		4 // 进程已经停止
 
 #ifndef NULL
-#define NULL ((void *) 0)
+#define NULL ((void *) 0) // 定义 NULL 空指针
 #endif
 
+// 复制进程的页目录表 (mm/memory.c)
 extern int copy_page_tables(unsigned long from, unsigned long to, long size);
+// 释放页表所指定的内存块和页表本身 (mm/memory.c)
 extern int free_page_tables(unsigned long from, unsigned long size);
 
+// 调度程序的初始化函数 (kernel/sched.c) 
 extern void sched_init(void);
+// 进程调度函数 (kernel/sched.c) 
 extern void schedule(void);
+// 异常（陷阱）中断处理初始化函数：设置中断调用门，并允许中断请求信号 (kernel/sched.c) 
 extern void trap_init(void);
 #ifndef PANIC
+// 显示内核出错信息，然后死机
 volatile void panic(const char * str);
 #endif
+// 往 tty 上写指定长度的字符串 (kernel/chr_drv/tty_io.c) 
 extern int tty_write(unsigned minor,char * buf,int count);
 
-typedef int (*fn_ptr)();
+typedef int (*fn_ptr)(); // 定义函数指针类型：fn_ptr是指向一个无参数的，返回 int 的函数的指针
 
+// 数学协处理器结构，主要用于保存进程切换时候 i387 的执行状态
 struct i387_struct {
-	long	cwd;
-	long	swd;
-	long	twd;
-	long	fip;
-	long	fcs;
-	long	foo;
-	long	fos;
-	long	st_space[20];	/* 8*10 bytes for each FP-reg = 80 bytes */
+        long	cwd; // 控制字 (control word)
+        long	swd; // 状态字 (status word)
+        long	twd; // 标记字 (tag word)
+        long	fip; // 协处理器代码指针 
+        long	fcs; // 协处理器代码段寄存器
+        long	foo; // 内存操作数的偏移位置
+        long	fos; // 内存操作数的段值
+        // 8 个 10 字节的协处理器累加器
+        long	st_space[20];	/* 8*10 bytes for each FP-reg = 80 bytes */ 
 };
 
+// 任务状态段数据结构
 struct tss_struct {
-	long	back_link;	/* 16 high bits zero */
+	long	back_link;	/* 16 high bits zero */ 
 	long	esp0;
 	long	ss0;		/* 16 high bits zero */
 	long	esp1;
@@ -77,73 +88,117 @@ struct tss_struct {
 	struct i387_struct i387;
 };
 
+// 任务（进程）数据结构，也被称为进程描述符
 struct task_struct {
 /* these are hardcoded - don't touch */
-	long state;	/* -1 unrunnable, 0 runnable, >0 stopped */
-	long counter;
-	long priority;
-	long signal;
-	struct sigaction sigaction[32];
-	long blocked;	/* bitmap of masked signals */
+        // 任务状态：-1 不可运行，0 运行或就绪，> 0 等待或停止
+        long state;	/* -1 unrunnable, 0 runnable, >0 stopped */ 
+        long counter; // 任务运行时间计数（递减），运行时间片（滴答数）
+        long priority; // 任务优先级，任务开始时 counter = priority, 越大表示可以运行的时间越长
+        long signal; // 信号位图，每个比特位表示一个信号，信号值 = 位偏移值 + 1 
+        struct sigaction sigaction[32]; // 信号执行属性结构，对应信号将要执行的操作和标志信息
+        // 进程信号屏蔽位图，类似信号位图
+        long blocked;	/* bitmap of masked signals */ 
 /* various fields */
-	int exit_code;
-	unsigned long start_code,end_code,end_data,brk,start_stack;
-	long pid,father,pgrp,session,leader;
-	unsigned short uid,euid,suid;
-	unsigned short gid,egid,sgid;
-	long alarm;
-	long utime,stime,cutime,cstime,start_time;
-	unsigned short used_math;
+        int exit_code; // 任务执行停止的退出码，父进程会取
+        // 代码段地址，代码段长度（字节数），代码长度 + 数据长度（字节数），总长度（字节数），堆栈段地址
+        unsigned long start_code,end_code,end_data,brk,start_stack;
+        // 进程号，父进程号，进程组号，会话号，会话首领的进程号
+        long pid,father,pgrp,session,leader;
+        // 用户标识号，有效用户标识号，保存的用户标识号
+        unsigned short uid,euid,suid;
+        // 组标识号，有效组标识号，保存的组标识号
+        unsigned short gid,egid,sgid;
+        // 报警定时值（滴答数）
+        long alarm;
+        // 用户态运行时间（滴答数），内核态运行时间（滴答数），子进程用户态运行时间（滴答数），子进程内核态运行时间（滴答数），进程开始时刻（unix 时间格式，秒）
+        long utime,stime,cutime,cstime,start_time;
+        // 是否使用数学协处理器
+        unsigned short used_math;
 /* file system info */
-	int tty;		/* -1 if no tty, so it must be signed */
-	unsigned short umask;
-	struct m_inode * pwd;
-	struct m_inode * root;
-	struct m_inode * executable;
-	unsigned long close_on_exec;
-	struct file * filp[NR_OPEN];
+        // 进程使用 tty 终端的子设备号（-1 表示未使用终端）
+        int tty;		/* -1 if no tty, so it must be signed */
+        unsigned short umask; // 文件创建属性屏蔽位
+        struct m_inode * pwd; // 当前工作目录 i 节点结构的指针
+        struct m_inode * root; // 根目录 i 节点结构的指针 
+        struct m_inode * executable; // 执行文件 i 节点结构的指针 
+        unsigned long close_on_exec; // 执行时候关闭文件句柄位图标志 (include/fcntl.h) 
+        struct file * filp[NR_OPEN]; // 文件结构指针表，最多 32 项，表项号即是文件描述符值
 /* ldt for this task 0 - zero 1 - cs 2 - ds&ss */
-	struct desc_struct ldt[3];
+        // 局部描述符号表： 0 -- 空， 1 -- 代码段， 2 -- 数据和堆栈段
+        struct desc_struct ldt[3]; 
 /* tss for this task */
-	struct tss_struct tss;
+        // 进程的任务状态段结构
+        struct tss_struct tss;
 };
 
 /*
  *  INIT_TASK is used to set up the first task table, touch at
  * your own risk!. Base=0, limit=0x9ffff (=640kB)
  */
+
+/*
+ * INIT_TASK 用于设置第一个任务表，如果修改，后果自负！！！
+ * 基地址 = 0，段长 = 0x9ffff (640KB) 
+ */
 #define INIT_TASK \
 /* state etc */	{ 0,15,15, \
 /* signals */	0,{{},},0, \
-/* ec,brk... */	0,0,0,0,0,0, \
-/* pid etc.. */	0,-1,0,0,0, \
-/* uid etc */	0,0,0,0,0,0, \
-/* alarm */	0,0,0,0,0,0, \
-/* math */	0, \
-/* fs info */	-1,0022,NULL,NULL,NULL,0, \
-/* filp */	{NULL,}, \
+                                /* ec,brk... */	0,0,0,0,0,0, \
+        /* pid etc.. */	0,-1,0,0,0, \
+        /* uid etc */	0,0,0,0,0,0, \
+        /* alarm */	0,0,0,0,0,0, \
+        /* math */	0, \
+        /* fs info */	-1,0022,NULL,NULL,NULL,0, \
+        /* filp */	{NULL,}, \
 	{ \
-		{0,0}, \
-/* ldt */	{0x9f,0xc0fa00}, \
-		{0x9f,0xc0f200}, \
+            {0,0}, \
+                    /* ldt */	{0x9f,0xc0fa00}, \
+                                                 {0x9f,0xc0f200}, \
 	}, \
-/*tss*/	{0,PAGE_SIZE+(long)&init_task,0x10,0,0,0,0,(long)&pg_dir,\
-	 0,0,0,0,0,0,0,0, \
-	 0,0,0x17,0x17,0x17,0x17,0x17,0x17, \
-	 _LDT(0),0x80000000, \
+/*tss*/	{0,PAGE_SIZE+(long)&init_task,0x10,0,0,0,0,(long)&pg_dir, \
+                                             0,0,0,0,0,0,0,0, \
+                                             0,0,0x17,0x17,0x17,0x17,0x17,0x17, \
+                                             _LDT(0),0x80000000, \
 		{} \
 	}, \
 }
 
-extern struct task_struct *task[NR_TASKS];
-extern struct task_struct *last_task_used_math;
-extern struct task_struct *current;
-extern long volatile jiffies;
-extern long startup_time;
 
-#define CURRENT_TIME (startup_time+jiffies/HZ)
+/* #define INIT_TASK \  */
+/*         /\* state etc *\/	{ 0,15,15, \ // state, counter, priority */
+/* /\* signals *\/	0,{{},},0, \ // signal, sigaction[32], blocked */
+/*         /\* ec,brk... *\/	0,0,0,0,0,0, \ // exit_code, start_code, end_code, end_data, brk, start_stack */
+/*         /\* pid etc.. *\/	0,-1,0,0,0, \ // pid, father, pgrp, session, leader */
+/*         /\* uid etc *\/	0,0,0,0,0,0, \ // uid, euid, suid, gid, egid, sgid */
+/*         /\* alarm *\/	0,0,0,0,0,0, \ // alarm, utime, stime, cutime, cstime, start_time */
+/*         /\* math *\/	0, \ // used_math （没使用） */
+/*         /\* fs info *\/	-1,0022,NULL,NULL,NULL,0, \ // tty （没使用），umask (0022), pwd, root, executable, close-on-exec */
+/*         /\* filp *\/	{NULL,}, \ // file */
+/* 	{ \ */
+/*             {0,0}, \ //ldt[0] */
+/*                     /\* ldt *\/	{0x9f,0xc0fa00}, \ //ldt[1]: 代码段长640KB，基地址 0x0, G=1, D=1, DPL=3, P=1, Type=0xa */
+/*                                                  {0x9f,0xc0f200}, \ //ldt[2]: 数据段长640KB，基地址 0x0, G=1, D=1, DPL=3, P=1, Type=0x2 */
+/* 	}, \  */
+/*        \                      //tss结构  */
+/*        \                      //backlink, esp0, ss0, esp1, ss1, esp2,ss2,cr3 */
+/* /\*tss*\/	{0,PAGE_SIZE+(long)&init_task,0x10,0,0,0,0,(long)&pg_dir, \    */
+/*                                              0,0,0,0,0,0,0,0, \ //寄存器都为 0 */
+/*                                              0,0,0x17,0x17,0x17,0x17,0x17,0x17, \ // es = cs = ss = ds = fs = gs = 0x17 （段选择符） */
+/*                                              _LDT(0), 0x80000000, \ //ldt表入口，trace_bitmap */
+/* 		{} \ */
+/* 	}, \ */
+/* } */
 
-extern void add_timer(long jiffies, void (*fn)(void));
+extern struct task_struct *task[NR_TASKS]; // 任务指针数组，64个元素，每个元素都是一个指针，指向任务结构
+extern struct task_struct *last_task_used_math; // 上一个使用过数学协处理器的任务指针
+extern struct task_struct *current; // 当前任务指针
+extern long volatile jiffies; // 开机到现在经过的滴答数（10ms/滴答）
+extern long startup_time; // 开机时间，从 1970:0:0:0开始计时的秒数
+
+#define CURRENT_TIME (startup_time+jiffies/HZ) //当前时间（秒数）
+
+extern void add_timer(long jiffies, void (*fn)(void)); // 
 extern void sleep_on(struct task_struct ** p);
 extern void interruptible_sleep_on(struct task_struct ** p);
 extern void wake_up(struct task_struct ** p);
