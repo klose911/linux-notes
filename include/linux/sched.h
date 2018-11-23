@@ -207,11 +207,20 @@ extern void wake_up(struct task_struct ** p);
  * Entry into gdt where to find first TSS. 0-nul, 1-cs, 2-ds, 3-syscall
  * 4-TSS0, 5-LDT0, 6-TSS1 etc ...
  */
-#define FIRST_TSS_ENTRY 4
-#define FIRST_LDT_ENTRY (FIRST_TSS_ENTRY+1)
-#define _TSS(n) ((((unsigned long) n)<<4)+(FIRST_TSS_ENTRY<<3))
-#define _LDT(n) ((((unsigned long) n)<<4)+(FIRST_LDT_ENTRY<<3))
+
+/* 
+ * 在 GDT 表中寻找第一个 TSS 描述符选择子
+ * 0 : 空白，1：内核cs段，2：内核ds段，3：系统调用段（未使用），4：TSS0，5：LDT0，6：TSS1，7：LDT1 。。。 
+ */
+#define FIRST_TSS_ENTRY 4 // GDT 表中第一个任务的状态段(TSS)描述符选择子的索引号
+#define FIRST_LDT_ENTRY (FIRST_TSS_ENTRY+1) //  GDT 表中第一个任务的局部段(lDT)描述符选择子的索引号
+// 每个描述符占用8个字节，所以用 FIRST_TSS_ENTRY<<3 来表示第一个任务的TSS在GDT中的偏移量
+// 一对TSS和LDT总共占用16个字节，所以用 (((unsigned long) n)<<4) 来表示第 n 个任务的 TSS 和 第一个任务的TSS 的偏移量
+#define _TSS(n) ((((unsigned long) n)<<4)+(FIRST_TSS_ENTRY<<3)) // 计算第 n 个任务在 GDT 表中 TSS 描述符选择子的偏移量（字节）
+#define _LDT(n) ((((unsigned long) n)<<4)+(FIRST_LDT_ENTRY<<3)) // 计算第 n 个任务在 GDT 表中 LDT 描述符选择子的偏移量（字节）
+// 把第 n 个任务的 TSS段加载到“任务寄存器” TR 中
 #define ltr(n) __asm__("ltr %%ax"::"a" (_TSS(n)))
+// 把第 n 个任务的 LDT段加载到“局部描述符表寄存器” LDTR中
 #define lldt(n) __asm__("lldt %%ax"::"a" (_LDT(n)))
 
 /*
@@ -234,6 +243,29 @@ __asm__("str %%ax\n\t" \
  * This also clears the TS-flag if the task we switched to has used
  * tha math co-processor latest.
  */
+
+/*
+ * 切换当前任务到任务号 n, 如果要切换到的任务，还使用过数学协处理器，那还需要清空控制寄存器(CR0)的 TS 标志位 
+ * 
+ */
+
+/**
+ * 跳转到一个任务的 TSS 段选择符组成的地址，可以让 CPU 进行任务切换操作
+ * 
+ * 输入： %0 -- 指向 __tmp.a , %1 -- 指向 __tmp.b
+ *        dx -- 新任务n的选择符，ecx -- 新任务n的任务结构指针 task[n]
+ * 
+ * 临时数据结构 __tmp 是用来做长跳转的(ljmp)指令的操作数，其中它由4字节偏移地址和2字节的段选择符组成。
+ * 因此 __tmp.a 是32位偏移值，而 __tmp.b 的低2字节是新TSS段选择符，高2字节未用。实际上这里 a 值未用
+ * 
+ * ljmp *%0 内存间接跳转指令，使用6字节操作数作为跳转目的的长跳转指令
+ * 格式为：ljmp 16位段选择子，32位段偏移值。注意：内存中保存的顺序，实际上是和这里指令中参数顺序相反 
+ */
+// 1. 校验当前任务是否就是要跳转的任务 n ，如果是则直接退出
+// 2. 把dx中 TSS(n) 存入到 __tmp.b
+// 3. 长跳转切换到任务 n
+// 4. 比较“最后一个使用数学协处理器”的任务指针 (last_task_used_math) 和“任务n”的指针是否一样
+// 5. 如果一样则清空 cr0 中的 任务切换标志位 (TS) : clts 
 #define switch_to(n) {\
 struct {long a,b;} __tmp; \
 __asm__("cmpl %%ecx,current\n\t" \
@@ -249,8 +281,19 @@ __asm__("cmpl %%ecx,current\n\t" \
 	"d" (_TSS(n)),"c" ((long) task[n])); \
 }
 
+// 页面地址对准，内核未使用        
 #define PAGE_ALIGN(n) (((n)+0xfff)&0xfffff000)
 
+/**
+ * 设置位于地址 addr 处描述符的基地址字段，基地址是 base 
+ * 
+ * 输入：%0 -- 地址 addr 偏移 2 , %1 -- 地址 addr 偏移 4 , %2 -- 地址 addr 偏移 7 
+ *      edx -- 基地址 base 
+ */
+// 1. 基地址 base 中的低16位(0 ~ 15) -> [addr + 2]
+// 2. edx 中高16位 (16 ~ 31) -> dx
+// 3. dx 中低16位 (16 ~ 23) -> [addr + 4]
+// 4. dx 中高16位 （24 ~ 31） -> [addr + 7]
 #define _set_base(addr,base)  \
 __asm__ ("push %%edx\n\t" \
 	"movw %%dx,%0\n\t" \
@@ -264,6 +307,18 @@ __asm__ ("push %%edx\n\t" \
 	 "d" (base) \
 	)
 
+/**
+ * 设置位于地址 addr 处描述符的段限长字段，段限长是 limit 
+ * 
+ * 输入：%0 -- 地址 addr , %1 -- 地址 addr 偏移 6
+ *      edx -- 段长值 limit  
+ */
+// 1. 段长 limit 的低16位(0 ~ 15) -> [addr]
+// 2. edx 中的高4位(16 ~ 19) -> dl
+// 3. 取[addr + 6] 中的字节 -> dh，其中高4位是一些标志位
+// 4. 清空 dh 中的低4位
+// 5. 合并 dh 中的高4位，和 dl 中的低4位成一个字节
+// 6. 把合成后的字节 -> [addr + 6]
 #define _set_limit(addr,limit) \
 __asm__ ("push %%edx\n\t" \
 	"movw %%dx,%0\n\t" \
@@ -278,7 +333,9 @@ __asm__ ("push %%edx\n\t" \
 	 "d" (limit) \
 	)
 
+// 设置局部描述符表中 ldt 的基地址字段 base 
 #define set_base(ldt,base) _set_base( ((char *)&(ldt)) , (base) )
+// 设置局部描述符表中 ldt 的段限长字段 limit 
 #define set_limit(ldt,limit) _set_limit( ((char *)&(ldt)) , (limit-1)>>12 )
 
 /**
