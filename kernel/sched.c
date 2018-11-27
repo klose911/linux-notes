@@ -153,46 +153,77 @@ void math_state_restore()
  * tasks can run. It can not be killed, and it cannot sleep. The 'state'
  * information in task[0] is never used.
  */
+
+/**
+ * 'schedule()' 是进程调度函数。这是很好的代码。一般情况下没有任何理由去修改它，因为它可以在任何情况下工作得很好（比如能够对 IO 边界响应程序处理得很好）
+ * 唯一需要注意的是这里对于信号处理的代码
+ *
+ * 注意!!! 任务 0 是个闲置(idle)任务，只有当没有其他任务可以运行时候才会调用它
+ * 因此任务 0 无法被杀死，也无法被终止， task[0] 中的 state 字段实际上是永远不会被用到
+ */
 void schedule(void)
 {
         int i,next,c;
-        struct task_struct ** p;
+        struct task_struct ** p; // 任务结构指针的指针
 
 /* check alarm, wake up any interruptible tasks that have got a signal */
-
+// 检查 alarm (进程的报警定时值)，唤醒任何已经“得到信号”的“可中断任务”
+        // 从任务数组的最后一个任务开始循环
         for(p = &LAST_TASK ; p > &FIRST_TASK ; --p)
+                // 任务结构指针不为空
                 if (*p) {
+                        // 任务设置过定时值，并且已经超时
                         if ((*p)->alarm && (*p)->alarm < jiffies) {
+                                // 信号位图对应的 SIGALRM 位设置为 1，等价于向任务发送 SIGALRM 信号，这个信号默认的操作是终止进程
                                 (*p)->signal |= (1<<(SIGALRM-1));
-                                (*p)->alarm = 0;
+                                // 进程定时器归零
+                                (*p)->alarm = 0; 
                         }
+                        // (*p)->signal : 信号位图中有信号
+                        // ~(_BLOCKABLE & (*p)->blocked) : 信号位图中的信号不在信号屏蔽位图中。注意：SIGKILL 和 SIGSTOP 信号无法被屏蔽
                         if (((*p)->signal & ~(_BLOCKABLE & (*p)->blocked)) &&
-                            (*p)->state==TASK_INTERRUPTIBLE)
-                                (*p)->state=TASK_RUNNING;
+                            (*p)->state==TASK_INTERRUPTIBLE) // 任务状态是“可中断的休眠”状态
+                                (*p)->state=TASK_RUNNING; // 状态设置为“就绪”，等价于”唤醒“进程
                 }
 
 /* this is the scheduler proper: */
 
+        // 调度主程序
         while (1) {
-                c = -1;
-                next = 0;
-                i = NR_TASKS;
-                p = &task[NR_TASKS];
+                c = -1; // 临时 counter 值
+                next = 0; // 下一个运行任务的数组索引
+                i = NR_TASKS; // 64 
+                p = &task[NR_TASKS]; // 指向任务结构指针数组的最后一项
+                // 从任务数组最后开始循环
                 while (--i) {
-                        if (!*--p)
+                        // 跳过任务结构指针为空的元素
+                        if (!*--p) 
                                 continue;
+                        // 查找处于就绪状态下 counter 值最大的任务
                         if ((*p)->state == TASK_RUNNING && (*p)->counter > c)
                                 c = (*p)->counter, next = i;
                 }
-                if (c) break;
+                if (c) break; // 如果有可执行的任务，则跳出当前循环，进行任务切换操作 -> switch_to(next)
+
+                //系统中每个可运行的任务时间片都用完，那么更新每个任务的 counter 值，然后从 while(1) 从新开始循环
                 for(p = &LAST_TASK ; p > &FIRST_TASK ; --p)
                         if (*p)
+                                // 新 counter 值 = 老 counter 值 / 2 + priority 注意：这里无视进程状态 
                                 (*p)->counter = ((*p)->counter >> 1) +
                                         (*p)->priority;
         }
-        switch_to(next);
+        // 切换任务到 next 处的任务
+        // 由于 next 被初始化为 0，所以当没有任何其他任务时，next始终为0，调度函数只能选择执行任务0
+        // 任务0 会执行 'pause()' 系统调用，这个系统调用又会调用本函数 'schedule()'
+        switch_to(next); 
 }
 
+/**
+ * 'pause()' 系统调用。转换当前任务为可中断状态，并且重新调度
+ *
+ * 该系统调用将导致进程进入睡眠状态，直到收到一个信号。该信号用于终止进程，或者使进程调用一个信号捕获（处理）函数
+ * 只有当收到一个信号，并且信号捕获函数返回，'pause()' 才会返回，此时返回值是 -1，并且 errno 被置为 EINTR （实际上这里还没有完全实现！！！）
+ */
 int sys_pause(void)
 {
         current->state = TASK_INTERRUPTIBLE;
