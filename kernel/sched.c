@@ -231,22 +231,57 @@ int sys_pause(void)
         return 0;
 }
 
+/**
+ * 把当前任务指定为“不可中断的阻塞“状态，并让这个进程等待队列的头指针指向”当前任务的结构指针“ 
+ *
+ * p: 某个等待资源的进程队列的头指针，资源可以是某个文件节点(i_node)，可以是等待某块内存，也可以是等待某个硬件等
+ * 注意：p是指向”某个进程结构指针“的二级指针
+ *
+ * 无返回值
+ * 
+ * 进入”不可中断的阻塞“后的进程，内核程序必须利用 wake_up() 方法明确唤醒
+ * 
+ */
+// 1. p的值（这是一个地址）对于每个等待进程来说都是一样的
+// 2. 每个进程的栈上都维持这一个 tmp 值，它指向上一个等待任务的结构指针，第一个等待任务的 tmp 的值为 NULL 
+// 3. 整个等待队列的顺序是后进先出的
 void sleep_on(struct task_struct **p)
 {
-        struct task_struct *tmp;
+        struct task_struct *tmp; // 栈上分配一个临时任务结构指针
 
-        if (!p)
+        // 检验二级指针 p 是否为空
+        if (!p) 
                 return;
+        // 如果当前任务是任务0，则死机，因为任务0不可以被休眠！！！
         if (current == &(init_task.task))
                 panic("task[0] trying to sleep");
-        tmp = *p;
-        *p = current;
-        current->state = TASK_UNINTERRUPTIBLE;
-        schedule();
-        if (tmp)
-                tmp->state=0;
+        tmp = *p; // 把等待队列的头指针暂时赋给 tmp。注意：当第一个进程开始等待的时候，这时候 *p = NULL，所以 tmp 也会被赋值为 NULL 
+        *p = current; // ”等待队列的头指针“ 指向 ”当前任务结构指针“
+        // 当前任务的状态设置为”不可中断的阻塞“，只能靠 wake_up明确唤醒 
+repeat: current->state = TASK_UNINTERRUPTIBLE; // 注意：下面这条语句可能被重复执行，但只有当前任务位于等待队列头指针的时候，才是最后一次执行
+        schedule(); // 执行调度函数
+        // 检查”等待队列的头指针“是否还指向”当前任务“的结构指针
+        // 如果不是，那说明后面还有等待进程被加入进来！！！
+        if(*p && *p != current) {
+                (**p).state=0; // 最后一个”等待这个资源的进程“状态被设置为”就绪“
+                goto repeat; // 再次把当前任务的状态设置为”可中断阻塞“
+        }
+        // 执行到这里说明，说明当前任务已经被真正的唤醒，当前任务状态已经是 "TASK_RUNNING" 
+        // ”等待队列的头指针“ 指向前一个等待任务，并检查前面一个等待任务的结构指针是否为NULL
+        if (*p = tmp) // 实际上这里在判断tmp指向的是不是第一个等待任务的结构指针，如果是的话，也就没有前一个等待任务，所以也无须唤醒
+                tmp->state=0; // ”前面一个等待任务“的状态设置为”就绪“
 }
 
+/**
+ * 把当前任务指定为“可中断的阻塞“状态，并让这个进程等待队列的头指针指向”当前任务的结构指针“ 
+ *
+ * p: 某个等待资源的进程队列的头指针，资源可以是某个文件节点(i_node)，可以是等待某块内存，也可以是等待某个硬件等
+ * 注意：p是指向”某个进程结构指针“的二级指针
+ *
+ * 无返回值
+ * 
+ * 进入”可中断的阻塞“后的进程，除了被 wakeup() 唤醒之外，还可以被信号，超时等手段唤醒！！！
+ */
 void interruptible_sleep_on(struct task_struct **p)
 {
         struct task_struct *tmp;
@@ -257,22 +292,30 @@ void interruptible_sleep_on(struct task_struct **p)
                 panic("task[0] trying to sleep");
         tmp=*p;
         *p=current;
-repeat:	current->state = TASK_INTERRUPTIBLE;
+        // 当前任务设置为”可中断阻塞“，还可以被超时，信号等手段唤醒
+repeat:	current->state = TASK_INTERRUPTIBLE; 
         schedule();
         if (*p && *p != current) {
-                (**p).state=0;
-                goto repeat;
+                (**p).state=0; 
+                goto repeat; 
         }
-        *p=NULL;
-        if (tmp)
+        if (*p = tmp) 
                 tmp->state=0;
 }
 
+/**
+ * 明确唤醒 *p 指向的任务
+ * 由于新等待任务是插入在等待队列的头指针处，所以这里唤醒的是”最后进入等待队列“的任务
+ *
+ * p: 等待进程队列的头指针
+ *
+ * 无返回值
+ */
 void wake_up(struct task_struct **p)
 {
+        // 检查 ”等待队列的头指针“ -> "进程结构指针" 是否为空
         if (p && *p) {
-                (**p).state=0;
-                *p=NULL;
+                (**p).state=0; // 最后一个进入等待队列的任务 状态置为 ”就绪“
         }
 }
 
