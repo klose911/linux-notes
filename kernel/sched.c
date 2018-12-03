@@ -387,86 +387,133 @@ void do_floppy_timer(void)
         }
 }
 
-#define TIME_REQUESTS 64
+// 下面是关于定时器的代码
+#define TIME_REQUESTS 64 // 最多可以有64个定时器
 
+// 定时器结构，这里只用于给软驱关闭和启动马达
 static struct timer_list {
-        long jiffies;
-        void (*fn)();
-        struct timer_list * next;
-} timer_list[TIME_REQUESTS], * next_timer = NULL;
+        long jiffies; // 定时滴答数
+        void (*fn)(); // 定时处理程序
+        struct timer_list * next; // 指向下一个定时器的指针
+} timer_list[TIME_REQUESTS], * next_timer = NULL; // timer_list[TIME_REQUESTS]] 是定时器结构数组，next_timer 是队列头指针
 
+/**
+ * 添加定时器：主要提供给 'floppy.c' 来执行启动和关闭马达的延时操作
+ *
+ * jiffies: 指定的定时滴答数
+ * fn: 定时处理器函数指针
+ *
+ * 无返回值
+ *
+ */
 void add_timer(long jiffies, void (*fn)(void))
 {
         struct timer_list * p;
 
+        // 如果定时处理程序指针为空，则退出
         if (!fn)
                 return;
-        cli();
+        cli(); // 关闭中断
+        // 如果定时值小于0，则立刻调用定时处理程序，并且该定时器不加入到链表中
         if (jiffies <= 0)
                 (fn)();
         else {
+                // 遍历定时器数组，从中找到一个“空闲项定时器”
                 for (p = timer_list ; p < timer_list + TIME_REQUESTS ; p++)
-                        if (!p->fn)
+                        if (!p->fn) // 定时器的处理程序指针为空
                                 break;
+                // 用完了所有的定时器，则系统崩溃
                 if (p >= timer_list + TIME_REQUESTS)
                         panic("No more time requests free");
+                // 设置“空闲项定时器”的“定时滴答数”和“定时器处理程序指针”
                 p->fn = fn;
                 p->jiffies = jiffies;
-                p->next = next_timer;
-                next_timer = p;
-                while (p->next && p->next->jiffies < p->jiffies) {
-                        p->jiffies -= p->next->jiffies;
-                        fn = p->fn;
-                        p->fn = p->next->fn;
-                        p->next->fn = fn;
-                        jiffies = p->jiffies;
-                        p->jiffies = p->next->jiffies;
+                p->next = next_timer; // “空闲项定时器”的下一个定时器指针指向当前链表的头指针
+                next_timer = p; // “当前链表头指针”指向找到的“空闲项定时器”
+                // 链表项按定时大小值从小到大排序，在排序时候减去排在前面所需的滴答数
+                // 这里其实没有考虑周全，如果新插入的定时器的值小于原来头一个定时器的值，还是需要把第二个的定时器的滴答数减去第一个的滴答数！！！
+                while (p->next && p->next->jiffies < p->jiffies) { // 下一个定时器不为空 并且 下一个定时器的滴答值 < 当前定时器的滴答值
+                        p->jiffies -= p->next->jiffies; // 当前计时器的滴器值 = 下一个定时器的滴答值 - 当前计时器的滴答值
+                        // 下面三条语句，交换了 p 和 p->next 的处理程序指针值
+                        fn = p->fn; // 暂存“当前计时器“的”处理程序指针”
+                        p->fn = p->next->fn; // “当前计时器”的“处理程序指针”赋值为“下一个计时器“的”处理程序指针”
+                        p->next->fn = fn; // 下一个定时器的“处理程序指针”恢复为暂存的“当前计时器”的“处理程序指针”
+                        // 下面三条语句，交换了 p 和 p->next 的滴答数
+                        jiffies = p->jiffies; // 暂存“当前计时器的滴答数”，实际上这是一个差值
+                        p->jiffies = p->next->jiffies; // 交换计时滴答数
                         p->next->jiffies = jiffies;
-                        p = p->next;
+                        // 指针移到下一个定时器上，进行下一次循环
+                        p = p->next; 
                 }
         }
-        sti();
+        sti(); // 打开中断
 }
 
+
+/**
+ * 时钟中断 C 函数处理程序，在 system_call.s 中的 _timer_interrupt() 中被调用
+ *
+ * cpl: 当前特权级 0 或 3，时钟中断程序发生时候代码选择符中的特权级
+ * cpl = 0 表示运行在内核级， cpl = 3 表示运行在用户级
+ *
+ * 对于一个用户进程由于执行时间片用完，则进行任务切换
+ */
 void do_timer(long cpl)
 {
-        extern int beepcount;
-        extern void sysbeepstop(void);
+        extern int beepcount; // 扬声器发声时间滴答器 
+        extern void sysbeepstop(void); // 关闭扬声器发声
 
-        if (beepcount)
-                if (!--beepcount)
-                        sysbeepstop();
+        if (beepcount) // 扬声器发声时间滴答数大于0
+                if (!--beepcount) // “扬声器发声时间滴答数 - 1” 等于 0, 发声时间即将用完 
+                        sysbeepstop(); // 关闭扬声器发声功能
 
-        if (cpl)
-                current->utime++;
-        else
-                current->stime++;
+        if (cpl) // cpl = 3 ：用户级
+                current->utime++; // 用户时间递增
+        else // cpl = 0 ：内核级
+                current->stime++; //系统时间递增
 
-        if (next_timer) {
-                next_timer->jiffies--;
-                while (next_timer && next_timer->jiffies <= 0) {
-                        void (*fn)(void);
+        // 如果有定时器存在
+        if (next_timer) { 
+                next_timer->jiffies--; // 定时器链表头指针指向的定时器的滴答数减 1 
+                while (next_timer && next_timer->jiffies <= 0) { // 头指针指向的定时器的滴答数已经用完
+                        void (*fn)(void); // 定义一个局部函数指针变量 fn 
 			
-                        fn = next_timer->fn;
-                        next_timer->fn = NULL;
-                        next_timer = next_timer->next;
-                        (fn)();
+                        fn = next_timer->fn; // “头指针”指向的定时器的定时处理程序指针暂存为 fn 
+                        next_timer->fn = NULL; // 头指针的定时器的定时处理程序指针置为 NULL，以防“野指针” 
+                        next_timer = next_timer->next; // 头指针指向下一个定时器
+                        (fn)(); // 调用 fn 中暂存的处理程序指针
                 }
         }
+        // 检查软盘控制器 FDC 的数字输出寄存器中马达启动位是否被置位
         if (current_DOR & 0xf0)
-                do_floppy_timer();
+                do_floppy_timer(); // 启动软盘定时程序
+
+        // 如果当前进程的时间片还没跑完，则退出
         if ((--current->counter)>0) return;
+        // 当前进程的时间片设置为 0 
         current->counter=0;
+        // 如果是内核态，则退出
         if (!cpl) return;
+        // 如果是用户态，则执行进程调度程序
         schedule();
 }
 
+/**
+ * 系统调用功能：设置报警定时器值（秒）
+ *
+ * second: 报警定时器值（秒）
+ *
+ * 返回值：返回距离原来报警时刻的间隔时间（秒数）
+ * 如果 second > 0 则更新当前进程的 alarm 字段，否则当前进程的 alarm 字段重置为 0 
+ */
 int sys_alarm(long seconds)
 {
-        int old = current->alarm;
+        int old = current->alarm; // 当前进程的报警字段值（滴答数）
 
-        if (old)
-                old = (old - jiffies) / HZ;
+        if (old) // old 不为 0 
+                old = (old - jiffies) / HZ; // 当前进程距离报警时刻的间隔时间（秒）
+        
+        // 如果 second > 0，更新当前进程的报警字段值（滴答数）， 否则当前进程的 alarm 字段重置为 0
         current->alarm = (seconds>0)?(jiffies+HZ*seconds):0;
         return (old);
 }
