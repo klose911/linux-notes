@@ -83,16 +83,45 @@ __asm__ ("movw %%dx,%%ax\n\t" \
 #define set_system_gate(n,addr)                                         \
                          _set_gate(&idt[n],15,3,addr)
 
-#define _set_seg_desc(gate_addr,type,dpl,base,limit) {                  \
-                                 *(gate_addr) = ((base) & 0xff000000) | \
-                                         (((base) & 0x00ff0000)>>16) |  \
-                                         ((limit) & 0xf0000) |          \
-                                         ((dpl)<<13) |                  \
-                                         (0x00408000) |                 \
-                                         ((type)<<8);                   \
-                                 *((gate_addr)+1) = (((base) & 0x0000ffff)<<16) | \
-                                         ((limit) & 0x0ffff); }
+/**
+ * 在段描述符表中设置段描述符
+ *
+ * gate_addr: 描述符所处的“地址”
+ * type：“类型”域值
+ * dpl：特权级
+ * base: 段的基地址
+ * limit: 段的限长
+ *
+ * 这里的实际上内核并没有使用这个宏
+ */
+#define _set_seg_desc(gate_addr,type,dpl,base,limit) {          \
+                *((gate_addr)+1) = ((base) & 0xff000000) |      \ 
+                        (((base) & 0x00ff0000)>>16) |           \
+                        ((limit) & 0xf0000) |                   \
+                        ((dpl)<<13) |                           \
+                        (0x00408000) |                          \
+                        ((type)<<8);                            \
+                *(gate_addr) = (((base) & 0x0000ffff)<<16) |    \
+                        ((limit) & 0x0ffff); }
 
+/**
+ * “全局段描述符表”中设置“任务状态段(tss)”或“局部描述符(ldt)”
+ *
+ * n: 全局段描述符表中项n所对应的地址
+ * addr: 状态段/局部表所在的地址
+ * type: 描述符的标志类型字节
+ *
+ * %0: eax(addr地址), %1: 描述符项n的地址, %2:描述符项n的地址偏移2字节, %3: 描述符项n的地址偏移4字节,
+ * %4: 描述符项n的地址偏移5字节, %5: 描述符项n的地址偏移6字节, %6: 描述符项n的地址偏移7字节
+ */
+// 1. 将 TSS/LDT 的长度放入描述符的长度域（第 0~1 字节）
+// 2. 将基地址的低字放入描述符的第 2~3 字节
+// 3. 将基地址的高字循环移入ax中
+// 4. 将基地址的高字中的低字节(al)移入描述符第4字节
+// 5. 将标志型字移入描述符的第5字节
+// 6. 描述符号的第6字节置为 0
+// 7. 将基地址的高字中的高字节(ah)移入描述符第7字节
+// 8. eax 再右循环 16比特，恢复原来的eax值
 #define _set_tssldt_desc(n,addr,type)                                   \
                          __asm__ ("movw $104,%1\n\t"                    \
                                   "movw %%ax,%2\n\t"                    \
@@ -105,7 +134,13 @@ __asm__ ("movw %%dx,%%ax\n\t" \
                                   ::"a" (addr), "m" (*(n)), "m" (*(n+2)), "m" (*(n+4)), \
                                    "m" (*(n+5)), "m" (*(n+6)), "m" (*(n+7)) \
                                  )
-
+/**
+ * 在全局表中设置状态段描述符，类型是"0x89"  
+ */
 #define set_tss_desc(n,addr) _set_tssldt_desc(((char *) (n)),((int)(addr)),"0x89")
+
+/**
+ * 在全局表中设置局部表描述符，类型是"0x82"  
+ */
 #define set_ldt_desc(n,addr) _set_tssldt_desc(((char *) (n)),((int)(addr)),"0x82")
 

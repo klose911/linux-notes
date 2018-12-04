@@ -555,31 +555,57 @@ int sys_nice(long increment)
         return 0;
 }
 
+/**
+ * 进程调度初始化程序
+ */
 void sched_init(void)
 {
         int i;
         struct desc_struct * p;
 
-        if (sizeof(struct sigaction) != 16)
+        // 纠错用，无实际含义
+        if (sizeof(struct sigaction) != 16) 
                 panic("Struct sigaction MUST be 16 bytes");
+
+        // 设置全局描述符表的第5项(gdt+FIRST_TSS_ENTRY)为初始任务的状态段描述符
         set_tss_desc(gdt+FIRST_TSS_ENTRY,&(init_task.task.tss));
+        // 设置全局描述符表的第6项(gdt+FIRST_LDT_ENTRY)为初始任务的局部表描述符
         set_ldt_desc(gdt+FIRST_LDT_ENTRY,&(init_task.task.ldt));
-        p = gdt+2+FIRST_TSS_ENTRY;
+        
+        p = gdt+2+FIRST_TSS_ENTRY; // p 指向“全局描述符表”的第7项
+
+        //清理任务结构数组和全局描述符号表
+        // 注意： 任务结构数组的第一个初始任务进程和全局描述符表中的初始任务的描述符都还在！！！
         for(i=1;i<NR_TASKS;i++) {
-                task[i] = NULL;
-                p->a=p->b=0;
-                p++;
-                p->a=p->b=0;
-                p++;
+                task[i] = NULL; // 任务结构数组项设置为空
+                p->a=p->b=0; // 全局描述符表的用户任务对应的TSS段为空
+                p++; // 指向下一个描述符
+                p->a=p->b=0; // 全局描述符表的用户任务对应的LDT表为空
+                p++; // 指向下一个描述符
         }
 /* Clear NT, so that we won't have troubles with that later on */
+        // 清除标志寄存器中的 NT 标志位，这样以后不会麻烦
+        // eflags 中的 NT 标志位用于控制任务的嵌套调用，如果 NT == 1，那么当前中断任务执行 iret 指令时就会引起任务切换（NT的含义是 TSS 段中的 back_link字段是否有效， NT == 0时，back_link字段无效）
         __asm__("pushfl ; andl $0xffffbfff,(%esp) ; popfl");
+
+// 将gdt中“任务0的TSS选择符”加载到任务寄存器 tr中
         ltr(0);
-        lldt(0);
+        // 将gdt中“任务0的ldt选择符”加载到局部描述符表寄存器 ldtr
+        lldt(0); // 注意：ldtr只会明确加载这么唯一一次，未来在任务切换的时候，会根据 tss 段上的 ldt项 自动加载！！！
+
+        // 下面代码用来初始化 8253 定时器：
+        // 通道 0，工作方式 3，二进制计数方式
+        // 通道 0的输出引脚在 IRQ0 上，它每10毫秒发出一个 IRQ0中断请求
+        // LATCH 是初始定时计数器频率值
         outb_p(0x36,0x43);		/* binary, mode 3, LSB/MSB, ch 0 */
+        // 定时值低字节
         outb_p(LATCH & 0xff , 0x40);	/* LSB */
+        // 定时值高字节
         outb(LATCH >> 8 , 0x40);	/* MSB */
+        // 设置时钟中断门的处理程序句柄
         set_intr_gate(0x20,&timer_interrupt);
+        // 允许时钟中断
         outb(inb_p(0x21)&~0x01,0x21);
+        // 设置系统调用门的处理程序句柄
         set_system_gate(0x80,&system_call);
 }
