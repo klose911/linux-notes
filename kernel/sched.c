@@ -518,38 +518,63 @@ int sys_alarm(long seconds)
         return (old);
 }
 
+/**
+ * 取当前进程号
+ */
 int sys_getpid(void)
 {
         return current->pid;
 }
 
+/**
+ * 取当前父进程号
+ */
 int sys_getppid(void)
 {
         return current->father;
 }
 
+/**
+ * 取当前用户ID 
+ */
 int sys_getuid(void)
 {
         return current->uid;
 }
 
+/**
+ * 取当前有效用户ID 
+ */
 int sys_geteuid(void)
 {
         return current->euid;
 }
 
+/**
+ * 取当前组ID 
+ */
 int sys_getgid(void)
 {
         return current->gid;
 }
 
+/**
+ * 取当前有效组ID
+ */
 int sys_getegid(void)
 {
         return current->egid;
 }
 
+/**
+ * 降低当前进程的优先使用权
+ *
+ * increment: 调整当前进程优先使用权的差值
+ *
+ */
 int sys_nice(long increment)
 {
+        // 应该禁止 increment < 0，避免恶意增加进程优先级 ！！！
         if (current->priority-increment>0)
                 current->priority -= increment;
         return 0;
@@ -593,15 +618,14 @@ void sched_init(void)
         // 将gdt中“任务0的ldt选择符”加载到局部描述符表寄存器 ldtr
         lldt(0); // 注意：ldtr只会明确加载这么唯一一次，未来在任务切换的时候，会根据 tss 段上的 ldt项 自动加载！！！
 
-        // 下面代码用来初始化 8253 定时器：
-        // 通道 0，工作方式 3，二进制计数方式
-        // 通道 0的输出引脚在 IRQ0 上，它每10毫秒发出一个 IRQ0中断请求
-        // LATCH 是初始定时计数器频率值
+
+// 下面代码用来初始化 8253 定时器
+        // 先写定时器控制字节0x36到定时器控制端口0x43
+        // 0x36: 通道 0，工作方式 3，二进制计数方式，通道 0 的输出引脚在 IRQ0 上
         outb_p(0x36,0x43);		/* binary, mode 3, LSB/MSB, ch 0 */
-        // 定时值低字节
-        outb_p(LATCH & 0xff , 0x40);	/* LSB */
-        // 定时值高字节
-        outb(LATCH >> 8 , 0x40);	/* MSB */
+// 再写“定时器计数初始值”字 LATCH 到“定时器通道0”端口0x40，LATCH 是初始定时计数器频率值，每10毫秒发出一个 IRQ0 中断请求
+        outb_p(LATCH & 0xff , 0x40);	/* LSB */ // 定时值低字节
+        outb(LATCH >> 8 , 0x40);	/* MSB */ // 定时值高字节
         // 设置时钟中断门的处理程序句柄
         set_intr_gate(0x20,&timer_interrupt);
         // 允许时钟中断
