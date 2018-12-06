@@ -4,11 +4,11 @@
  *  (C) 1991  Linus Torvalds
  */
 
-#include <linux/sched.h>
-#include <linux/kernel.h>
-#include <asm/segment.h>
+#include <linux/sched.h> // 调度程序头文件
+#include <linux/kernel.h> // 内核头文件
+#include <asm/segment.h> // 段操作头文件
 
-#include <signal.h>
+#include <signal.h> // 信号头文件
 
 volatile void do_exit(int error_code);
 
