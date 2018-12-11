@@ -95,7 +95,7 @@ bad_sys_call:
 .align 2
 reschedule:
 	pushl $ret_from_sys_call # 将 ret_from_sys_call 的地址压栈，类似于把“返回地址”压栈
-	jmp schedule # 跳到 /kernel/sched.c中的 schedule() 处执行。。调度程序 schedule() 返回时候就从 ret_from_system_call 处执行
+	jmp schedule # 跳到 /kernel/sched.c中的 schedule() 处执行。调度程序 schedule() 返回时候就从 ret_from_system_call 处执行
 
 #### int 0x80 -- linux 系统调用入口：eax寄存器中是调用号，ebx, ecx, edx用来传递参数	
 .align 2
