@@ -4,14 +4,14 @@
  *  (C) 1991  Linus Torvalds
  */
 
-#include <errno.h>
-#include <signal.h>
-#include <sys/wait.h>
+#include <errno.h> // 错误头文件
+#include <signal.h> // 信号头文件 
+#include <sys/wait.h> // 等待进程终止头文件，定义了系统调用 wait() 和 waitpid() 以及相关常数符号
 
-#include <linux/sched.h>
-#include <linux/kernel.h>
-#include <linux/tty.h>
-#include <asm/segment.h>
+#include <linux/sched.h> // 进程调度头文件
+#include <linux/kernel.h> // 内核头文件，定义了常用函数的原型
+#include <linux/tty.h> // 终端头文件，定义了有关 tty_io 有关的参数
+#include <asm/segment.h> // 段操作头文件
 
 int sys_pause(void);
 int sys_close(int fd);
