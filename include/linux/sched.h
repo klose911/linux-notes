@@ -101,7 +101,7 @@ struct task_struct {
         long blocked;	/* bitmap of masked signals */ 
 /* various fields */
         int exit_code; // 任务执行停止的退出码，父进程会取
-        // 代码段地址，代码段长度（字节数），代码长度 + 数据长度（字节数），总长度（字节数），堆栈段地址
+        // 代码段地址（线性地址），代码段长度（字节数），代码长度 + 数据长度（字节数），总长度（字节数），堆栈段地址
         unsigned long start_code,end_code,end_data,brk,start_stack;
         // 进程号，父进程号，进程组号，会话号，会话首领的进程号
         long pid,father,pgrp,session,leader;
