@@ -161,9 +161,16 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
         p->tss.gs = gs & 0xffff;
         p->tss.ldt = _LDT(nr); // 任务局部描述符的选择子(ldt(nr) 在 GDT 中的偏移字节量 + 一些标志位)
         p->tss.trace_bitmap = 0x80000000; // 高16位有效
-        // 如果当前进程使用了数学协处理器，同样也需要在任务段中保存其上下文
+        
+        // 如果当前进程使用了数学协处理器，同样也需要在任务段中保存其上下文：
+        // 1. clts: 用于清理控制寄存器 cr0 中任务已交换的(TS)标志位，每当发生任务切换时，CPU 都会设置该标志，用于管理数学协处理器
+        // 如果该标志位被设置：那么每个 ESC 指令都会被捕获（异常7）。如果协处理器存在标志位MP也被设置，那么每个 WAIT 指令也会被捕获
+        // 因此，如果任务切换发生一个 ESC 指令开始执行之后，那么协处理器的内容就需要在执行下一个 ESC 指令前保存起来
+        // 异常捕获处理句柄会保存协处理器的内容，并复位 TS 标志位
+        // 2. fnsave: 把协处理中的状态保存到目标数指定的内存区域中 (p->tss.i387) 
         if (last_task_used_math == current)
                 __asm__("clts ; fnsave %0"::"m" (p->tss.i387));
+
         // 复制进程页表：
         // 1. 在新进程任务结构的”局部描述符表“中设置对应”局部代码段“和”局部数据段“的描述符
         // 2. 复制当前进程的”页目录项“和”页表项“
@@ -173,6 +180,7 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
                 free_page((long) p);
                 return -EAGAIN; // 返回 -EAGAIN 
         }
+        
         // 复制当前进程的文件描述符表
         for (i=0; i<NR_OPEN;i++)
                 // 如果当前进程打开了某个文件，那么子进程会共享这个文件
