@@ -200,49 +200,94 @@ void check_disk_change(int dev)
         invalidate_buffers(dev);
 }
 
+/**
+ * 下面两行代码是 hash 函数定义和 hash 表项的计算宏
+ * 
+ * hash 表的作用是减少查找比较元素所花费的时间。通过在元素的存储位置与关键字之间建立一个对应关系（hash函数），就可以直接通过函数计算立刻查询到指定的元素
+ * 
+ * 建立 hash 函数的条件是：尽量确保散列到任何数组项的概率基本相等。这里采用了关键字除以一个质数求余法
+ * 因为寻找的缓冲块有两个条件：设备号 dev 和逻辑块号 block，因此 hash 函数一定需要这两个条件
+ * 这里使用的是 dev 和 block 异或操作，然后再取余，保证计算的值都在 hash 表数组项之内
+ * 
+ */
+// 根据“设备号dev”和“逻辑块号block”计算 hash 值
 #define _hashfn(dev,block) (((unsigned)(dev^block))%NR_HASH)
-#define hash(dev,block) hash_table[_hashfn(dev,block)]
+// 根据“设备号dev”和“逻辑块号block” 获得对应的 hash 表的数组项
+#define hash(dev,block) hash_table[_hashfn(dev,block)] 
 
+/*
+ * 从 “hash 队列”和 “空闲缓冲队列”移走“缓冲块”
+ *
+ * bh: 特定的缓冲块（缓冲头结构指针）
+ *
+ * hash 队列：双向链表结构，空闲缓冲队列：双向循环链表结构
+ */
 static inline void remove_from_queues(struct buffer_head * bh)
 {
 /* remove from hash-queue */
+        // 从 hash 队列移除掉 bh 缓冲块
         if (bh->b_next)
-                bh->b_next->b_prev = bh->b_prev;
+                bh->b_next->b_prev = bh->b_prev; 
         if (bh->b_prev)
-                bh->b_prev->b_next = bh->b_next;
-        if (hash(bh->b_dev,bh->b_blocknr) == bh)
-                hash(bh->b_dev,bh->b_blocknr) = bh->b_next;
+                bh->b_prev->b_next = bh->b_next; 
+        // hash(bh->b_dev,bh->b_blocknr) 用来计算这个hash队列头指针，用来和bh比较，来确定 bh 是否是头一个元素
+        if (hash(bh->b_dev,bh->b_blocknr) == bh) 
+                hash(bh->b_dev,bh->b_blocknr) = bh->b_next; // 如果 bh 是该 hash 队列的头一个块，则让 hash 表的对应项指向本队列的下一个缓冲区  
 /* remove from free list */
+        
+        // 从空闲队列中移除 bh 缓冲块
         if (!(bh->b_prev_free) || !(bh->b_next_free))
                 panic("Free block list corrupted");
-        bh->b_prev_free->b_next_free = bh->b_next_free;
+        bh->b_prev_free->b_next_free = bh->b_next_free; 
         bh->b_next_free->b_prev_free = bh->b_prev_free;
+        // 如果空闲链表头指向本缓冲块，则让他指向下一个缓冲块
         if (free_list == bh)
                 free_list = bh->b_next_free;
 }
 
+/*
+ * 将缓冲块插入“空闲链表”尾部，同时放入 hash 队列中
+ *
+ * bh: 特定的缓冲块
+ */
 static inline void insert_into_queues(struct buffer_head * bh)
 {
 /* put at end of free list */
+        // 放入空闲链表尾部
         bh->b_next_free = free_list;
         bh->b_prev_free = free_list->b_prev_free;
         free_list->b_prev_free->b_next_free = bh;
         free_list->b_prev_free = bh;
 /* put the buffer in new hash-queue if it has a device */
+        // 如果该缓冲块对应一个设备则将其插入到hash队列中
         bh->b_prev = NULL;
         bh->b_next = NULL;
         if (!bh->b_dev)
                 return;
-        bh->b_next = hash(bh->b_dev,bh->b_blocknr);
-        hash(bh->b_dev,bh->b_blocknr) = bh;
-        bh->b_next->b_prev = bh;
+        /*
+         * 请注意：当 hash 表某散列项第1次插入项时， hash宏计算的值肯定为 NULL（见 buffer_init 函数最后）
+         * 也就是这里的 bh-> b_next 的值会是 NULL 
+         */
+        bh->b_next = hash(bh->b_dev,bh->b_blocknr); // 缓冲块的”后一个hash队列项”指向“hash队列的头”
+        hash(bh->b_dev,bh->b_blocknr) = bh; // “hash队列的头”指向“缓冲块 bh”
+        if(bh->b_next) // 必须判断这个散列项是否第一次插入项！！！
+                bh->b_next->b_prev = bh; // 缓冲块的”后一个hash队列项”的“前一个 hash 队列项”指向“缓冲块 bh”
 }
 
+/*
+ * 利用 hash 表在高速缓冲中寻找给定设备和指定逻辑块号的缓冲区块
+ *
+ * dev: 设备号
+ * block: 逻辑块号
+ * 如果找到：返回对应缓冲区块的指针，找不到：返回 NULL 
+ */
 static struct buffer_head * find_buffer(int dev, int block)
 {		
         struct buffer_head * tmp;
 
+        // 根据设备号和逻辑块号计算hash值，遍历对应hash值的“散列项”（双向队列）
         for (tmp = hash(dev,block) ; tmp != NULL ; tmp = tmp->b_next)
+                // 寻找匹配对应设备号和逻辑块号的缓冲块
                 if (tmp->b_dev==dev && tmp->b_blocknr==block)
                         return tmp;
         return NULL;
@@ -255,17 +300,31 @@ static struct buffer_head * find_buffer(int dev, int block)
  * will force it bad). This shouldn't really happen currently, but
  * the code is ready.
  */
+/*
+ * 代码为什么会是这样的，原因是竞争条件！！！
+ * 由于没有对缓冲块进行加锁（除非在读取他们中的数据），因此在进程睡眠的时候，可能会发生一些问题（例如一个读错误，导致该缓冲块出错）
+ * 目前这种情况实际上还没发生，但是代码已经准备好了 
+ */
+
+/*
+ * 利用 hash 表在高速缓冲区寻找特定的缓冲块，如果找到则等待该缓冲块解锁后再次校验通过后，才返回缓冲块头指针！！！
+ * 
+ * dev: 设备号
+ * block: 逻辑块号
+ * 如果找到：返回对应缓冲区块的指针，找不到：返回 NULL  
+ */
 struct buffer_head * get_hash_table(int dev, int block)
 {
         struct buffer_head * bh;
 
         for (;;) {
                 if (!(bh=find_buffer(dev,block)))
-                        return NULL;
-                bh->b_count++;
-                wait_on_buffer(bh);
-                if (bh->b_dev == dev && bh->b_blocknr == block)
+                        return NULL; // 找不到，则直接返回 NULL 
+                bh->b_count++; // 对该缓冲块的引用计数 + 1 
+                wait_on_buffer(bh); // 等待该缓冲块解锁
+                if (bh->b_dev == dev && bh->b_blocknr == block) // 再次判断缓冲块是否还是寻找的
                         return bh;
+                // 如果在睡眠状态，该缓冲块所属的设备号，逻辑块已经发生改变，则撤消对它的引用计数，重新寻找
                 bh->b_count--;
         }
 }
