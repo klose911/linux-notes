@@ -71,42 +71,73 @@ static struct task_struct * buffer_wait = NULL;
  */
 int NR_BUFFERS = 0;
 
+/*
+ * 等待特定的缓冲块解锁
+ *
+ * bh: 特定的缓冲块头指针
+ * 无返回值
+ *
+ * 如果指定的缓冲块 bh 已经上锁，就让当前进程不可中断地休眠在该缓冲块的等待队列 b_wait 中
+ * 在缓冲块解锁时，其等待队列上的所有进程都会被唤醒
+ * 
+ */
 static inline void wait_on_buffer(struct buffer_head * bh)
 {
-        cli();
-        while (bh->b_lock)
-                sleep_on(&bh->b_wait);
-        sti();
+        // 虽然这里关闭了中断，但并不会影响其他上下文响应中断!!! 
+        // 因为每个进程都在自己的 TSS 段上保存了自己的 EFLAGS 字段，而在进程切换时 CPU 中当前 EFLAGS 会随之自动切换
+        cli(); // 关中断
+        while (bh->b_lock) // 如果缓冲块已经被上锁，则进程进入不可中断地睡眠，等待其解锁 
+                sleep_on(&bh->b_wait); // 使用 sleep_on 进入睡眠状态，需要调用 wake_on 明确地唤醒
+        sti(); // 开中断
 }
 
+/**
+ * 同步设备和高速缓冲块的数据
+ *
+ * 无参数
+ * 成功返回 0 
+ */
 int sys_sync(void)
 {
         int i;
         struct buffer_head * bh;
 
-        sync_inodes();		/* write out inodes into buffers */
-        bh = start_buffer;
+        // 调用 i节点 同步函数，把“内存i节点表”中所有修改过的“i节点”写入高速缓冲区中
+        sync_inodes();		/* write out inodes into buffers */ // sync_inodes函数定义在 inodes.c 文件中
+        bh = start_buffer; // bh 指向缓冲区开始处
+        // 扫描所有的高速缓冲区
         for (i=0 ; i<NR_BUFFERS ; i++,bh++) {
-                wait_on_buffer(bh);
-                if (bh->b_dirt)
-                        ll_rw_block(WRITE,bh);
+                wait_on_buffer(bh); // 等待缓冲区解锁（如果已经上锁）
+                if (bh->b_dirt) // 如果缓冲块已经被修改
+                        ll_rw_block(WRITE,bh); // 产生写设备块请求（ll_rw_block 由块设备驱动提供，定义在 ll_rw_blk.c ）
         }
         return 0;
 }
 
+/**
+ * 对指定设备进行高速缓冲区数据与设备上数据进行同步
+ *
+ * dev: 设备号
+ * 返回：0
+ */
 int sync_dev(int dev)
 {
         int i;
         struct buffer_head * bh;
 
+        // 首先对高速缓冲区内所有该设备的缓冲块进行同步
         bh = start_buffer;
         for (i=0 ; i<NR_BUFFERS ; i++,bh++) {
                 if (bh->b_dev != dev)
                         continue;
                 wait_on_buffer(bh);
+                // 因为在休眠期间，可能该缓冲块已经被释放，或者挪作它用，所以需要再次检查 dev 设备号
                 if (bh->b_dev == dev && bh->b_dirt)
                         ll_rw_block(WRITE,bh);
         }
+        // 同步“内存中的i节点表”后，再次对高速缓冲区内所有该设备的缓冲块进行同步
+        // 这里采用两遍操作是为了提高内核效率：第一遍同步操作，可以让内核中许多“脏块”变干净，使得 i节点的同步操作能够提高效率
+        // 这里的第二次操作则把那些由于 i 节点同步操作而又变脏的缓冲块与设备中数据进行同步！！！ 
         sync_inodes();
         bh = start_buffer;
         for (i=0 ; i<NR_BUFFERS ; i++,bh++) {
@@ -119,6 +150,12 @@ int sync_dev(int dev)
         return 0;
 }
 
+/**
+ * 使指定设备中的高速缓冲块数据无效
+ *
+ * dev: 设备号
+ * 无返回值
+ */
 void invalidate_buffers(int dev)
 {
         int i;
@@ -129,8 +166,8 @@ void invalidate_buffers(int dev)
                 if (bh->b_dev != dev)
                         continue;
                 wait_on_buffer(bh);
-                if (bh->b_dev == dev)
-                        bh->b_uptodate = bh->b_dirt = 0;
+                if (bh->b_dev == dev) 
+                        bh->b_uptodate = bh->b_dirt = 0; // 缓冲块对应的有效标志，修改标志都设为0
         }
 }
 
