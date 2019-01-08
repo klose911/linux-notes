@@ -336,61 +336,111 @@ struct buffer_head * get_hash_table(int dev, int block)
  *
  * The algoritm is changed: hopefully better, and an elusive bug removed.
  */
+
+/*
+ * 接下来是 getblk 函数。为了防止竞争条件，它并不是非常清晰
+ * 绝大部分代码几乎很少被使用（比如 repate: ） 因此它比看起来要高效得多
+ *
+ * 算法已经被修改过了：希望它能变得更好，并且一个隐藏的很深的错误被修正了
+ * 
+ */
+
+// 下面宏用于同时判断缓冲块的“修改标志”和“锁定标志”，并且通过左移位运算使得“修改标志”的权重要比“锁定”标志大
 #define BADNESS(bh) (((bh)->b_dirt<<1)+(bh)->b_lock)
+
+/**
+ * 取高速缓冲中的指定缓冲块
+ *
+ * dev: 设备号
+ * block: 逻辑块号
+ *
+ * 返回：相应的高速缓冲头指针
+ * 
+ */
 struct buffer_head * getblk(int dev,int block)
 {
         struct buffer_head * tmp, * bh;
 
 repeat:
+        // 搜索 hash 表，如果指定块已经在缓冲中，则返回对应的缓冲头指针，退出
         if ((bh = get_hash_table(dev,block)))
                 return bh;
-        tmp = free_list;
+
+        // 扫描空闲双向循环列表，寻找空闲缓冲块区
+        tmp = free_list; // 首先，让 tmp 执行空闲列表的表头
         do {
-                if (tmp->b_count)
+                // 当一个缓冲区引用计数为0时候，并不一定意味者该缓冲块是干净的(b_dirty = 0) 或者 没有锁定的(b_lock = 0)
+                // 例如：当一个进程改写过一块内存时，就释放了，于是该 b_count = 0，但 b_dirty != 0
+                // 或者 当一个进程执行 breada()预读几个块时，只要 ll_rw_block()命令发出后，它就会递减 b_count，但此时实际硬盘访问可能操作还在进行，因此此时 b_lock = 1，但 b_count = 0  
+                if (tmp->b_count) // 如果该缓冲区正被使用（引用计数不等于 0），则继续扫描下一项
                         continue;
-                if (!bh || BADNESS(tmp)<BADNESS(bh)) {
-                        bh = tmp;
-                        if (!BADNESS(tmp))
+                // 如果 bh 指针为空 或者 tmp 所指向的缓冲块的权重标志小于 bh 头标志的权重
+                if (!bh || BADNESS(tmp)<BADNESS(bh)) { // 修改的权重大于锁定的权重，例如：tmp只有锁定标志，而bh有修改标志
+                        bh = tmp; // bh 指向 tmp 指向的缓冲头
+                        if (!BADNESS(tmp)) // tmp 即没有修改标志，也没有锁定标志，则退出循环
                                 break;
                 }
+                // 否则继续循环，看看能否找到一个 BADNESS 最小（最合适）的缓冲块
 /* and repeat until we find something good */
         } while ((tmp = tmp->b_next_free) != free_list);
+
+        // 遍历全部空闲列表，仍然无法找到对应的缓冲块（所有的缓冲块的引用计数都 > 0）
         if (!bh) {
-                sleep_on(&buffer_wait);
-                goto repeat;
+                sleep_on(&buffer_wait); // 当前进程进入不可中断的睡眠等待有空闲块可以用，注意：是针对整个空闲队列(buffer_wait)的等待
+                // 当有空闲块可以用时，进程会被明确唤醒
+                goto repeat; // 唤醒后，从头开始遍历整个空闲列表
         }
-        wait_on_buffer(bh);
-        if (bh->b_count)
-                goto repeat;
+
+        // 执行到这里说明已经找到合适的缓冲块
+        wait_on_buffer(bh); // 如果该缓冲块上锁了，先不可中断地睡眠等待该缓冲块解锁。注意：此时是针对该缓冲块(bh->b_wait)的队列等待
+        if (bh->b_count) // 如果在唤醒后，该缓冲块又被其他进程占用
+                goto repeat; // 只能从开始搜索合适的缓冲块 :-( 
+        
+        // 如果该缓冲块已被修改
         while (bh->b_dirt) {
-                sync_dev(bh->b_dev);
-                wait_on_buffer(bh);
-                if (bh->b_count)
-                        goto repeat;
+                sync_dev(bh->b_dev); // 将数据写盘
+                wait_on_buffer(bh); // 再次等待该缓冲区解锁
+                if (bh->b_count) // 如果在唤醒后，该缓冲块又被其他进程占用
+                        goto repeat; // 只能从开始搜索合适的缓冲块 :-(
         }
+        
 /* NOTE!! While we slept waiting for this block, somebody else might */
 /* already have added "this" block to the cache. check it */
-        if (find_buffer(dev,block))
-                goto repeat;
+        // 是否乘前面的睡眠时候，该缓冲块已经被其他进程加入到高速缓冲区了
+        if (find_buffer(dev,block)) 
+                goto repeat; // 再次重复上述查找过程
 /* OK, FINALLY we know that this buffer is the only one of it's kind, */
 /* and that it's unused (b_count=0), unlocked (b_lock=0), and clean */
-        bh->b_count=1;
-        bh->b_dirt=0;
-        bh->b_uptodate=0;
-        remove_from_queues(bh);
-        bh->b_dev=dev;
-        bh->b_blocknr=block;
+
+        // 现在最终找到一块合适的缓冲块了：未使用的(b_count = 0)，没上锁的(b_lock=0)，干净的 (b_dirty = 0) 
+        bh->b_count=1; // 引用计数  = 1 
+        bh->b_dirt=0; // 修改标志 = 0
+        bh->b_uptodate=0; // 有效（更新）标志 = 0
+        // 从 hash队列 和 空闲列表移出该缓冲头
+        remove_from_queues(bh); 
+        bh->b_dev=dev; // 设置该缓冲块的设备号
+        bh->b_blocknr=block; // 设置该缓冲块的逻辑块号
+        // 根据刚刚设置的设备号和逻辑块号，重新插入空闲链表的头部， hash表对应散列项队列的头部
         insert_into_queues(bh);
-        return bh;
+        return bh; // 返回该缓冲头指针
 }
 
+/**
+ * 释放某个高速缓冲块
+ *
+ * buf: 缓冲头指针
+ *
+ * 无返回值
+ */
 void brelse(struct buffer_head * buf)
 {
-        if (!buf)
+        if (!buf) // 缓冲块为空指针，直接返回
                 return;
-        wait_on_buffer(buf);
-        if (!(buf->b_count--))
+        wait_on_buffer(buf); // 等待该缓冲块解锁
+        // 该缓冲块的引用计数 - 1 
+        if (!(buf->b_count--)) // 如果引用计数不为0，则直接异常退出
                 panic("Trying to free free buffer");
+        // 明确唤醒”等待空闲块“(buffer_wait)的进程队列中的所有进程!!!
         wake_up(&buffer_wait);
 }
 
