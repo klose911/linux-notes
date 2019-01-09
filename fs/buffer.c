@@ -448,22 +448,36 @@ void brelse(struct buffer_head * buf)
  * bread() reads a specified block and returns the buffer that contains
  * it. It returns NULL if the block was unreadable.
  */
+
+/**
+ * 从设备上读取指定的数据块到高速缓冲区
+ *
+ * dev: 设备号
+ * block: 逻辑块号
+ *
+ * 返回：存储该缓冲块的头指针，如果该块不存在则返回 NULL 
+ */
 struct buffer_head * bread(int dev,int block)
 {
         struct buffer_head * bh;
 
-        if (!(bh=getblk(dev,block)))
-                panic("bread: getblk returned NULL\n");
-        if (bh->b_uptodate)
+        
+        if (!(bh=getblk(dev,block))) // 在高速缓冲区中申请一块空闲缓冲块来存储读入的数据
+                panic("bread: getblk returned NULL\n"); // 无法申请到空闲的缓冲块，内核出错，停机
+        if (bh->b_uptodate) // 如果申请到的缓冲块的数据是有效的（已更请的，可用的），直接返回该缓冲块
                 return bh;
-        ll_rw_block(READ,bh);
-        wait_on_buffer(bh);
-        if (bh->b_uptodate)
+        
+        ll_rw_block(READ,bh);// 调用底层块设备读写 ll_rw_block() 函数，产生读设备请求
+        wait_on_buffer(bh); // 缓冲块上锁（等待数据读入）
+        if (bh->b_uptodate) // 睡眠醒来后，如果缓存块数据已经有效，则返回缓冲头指针
                 return bh;
+
+        // 读取设备的操作失败，释放该缓冲区，返回 NULL 
         brelse(bh);
         return NULL;
 }
 
+// 复制缓冲块，从“from地址”复制一块1024字节的数据到“to地址”
 #define COPYBLK(from,to)                                    \
         __asm__("cld\n\t"                                   \
                 "rep\n\t"                                   \
@@ -477,25 +491,43 @@ struct buffer_head * bread(int dev,int block)
  * all at the same time, not waiting for one to be read, and then another
  * etc.
  */
+
+/**
+ * 一次读4个缓冲块数据到指定内存地址处
+ *
+ * address: 保存页面数据的物理地址
+ * dev: 设备号
+ * b[4]: 4个设备数据块号的数组
+ *
+ * 无返回值
+ *
+ * 该函数仅用 mm/memory.c 的 do_no_page() 函数中
+ * 
+ */
 void bread_page(unsigned long address,int dev,int b[4])
 {
         struct buffer_head * bh[4];
         int i;
 
-        for (i=0 ; i<4 ; i++)
-                if (b[i]) {
-                        if ((bh[i] = getblk(dev,b[i])))
-                                if (!bh[i]->b_uptodate)
-                                        ll_rw_block(READ,bh[i]);
+        // 循环执行4次
+        for (i=0 ; i<4 ; i++) {
+                if (b[i]) { // 数组中的逻辑块号有效
+                        if ((bh[i] = getblk(dev,b[i]))) // 申请空闲高速缓冲块
+                                if (!bh[i]->b_uptodate) // 判断申请到的缓冲块内容是否有效
+                                        ll_rw_block(READ,bh[i]); // 内容无效发起读设备请求
                 } else
-                        bh[i] = NULL;
-        for (i=0 ; i<4 ; i++,address += BLOCK_SIZE)
+                        bh[i] = NULL; // 逻辑块号无效，则不理会
+        }
+
+        // 将读取到高速缓冲区的数据复制到指定的页面地址处
+        for (i=0 ; i<4 ; i++,address += BLOCK_SIZE) {
                 if (bh[i]) {
-                        wait_on_buffer(bh[i]);
-                        if (bh[i]->b_uptodate)
-                                COPYBLK((unsigned long) bh[i]->b_data,address);
-                        brelse(bh[i]);
+                        wait_on_buffer(bh[i]); // 复制前先让进程等待读请求做完
+                        if (bh[i]->b_uptodate) // 睡眠醒来（读请求做完），再次判断缓冲块的内容是否有效（更新的）
+                                COPYBLK((unsigned long) bh[i]->b_data,address); // 拷贝缓冲块数据到指定内存地址
+                        brelse(bh[i]); // 拷贝完毕，释放对应的高速缓存区
                 }
+        }
 }
 
 /*
@@ -503,30 +535,45 @@ void bread_page(unsigned long address,int dev,int b[4])
  * blocks for reading as well. End the argument list with a negative
  * number.
  */
+
+/**
+ * 从指定设备额外读取指定的一些块
+ *
+ * dev: 设备号
+ * first: 逻辑块号1 注意：这是一个变长参数，以一个负数结尾！
+ *
+ * 成功：返回第一块缓冲头指针，反之：返回 NULL
+ *
+ * breada 可以像 bread 一样使用，但是会额外预读一些块
+ * 
+ */
 struct buffer_head * breada(int dev,int first, ...)
 {
         va_list args;
         struct buffer_head * bh, *tmp;
 
-        va_start(args,first);
-        if (!(bh=getblk(dev,first)))
+        va_start(args,first); // 取可变参数表的第一个参数 first 
+        if (!(bh=getblk(dev,first))) // 为第一个逻辑块号申请一块空闲缓冲块
                 panic("bread: getblk returned NULL\n");
-        if (!bh->b_uptodate)
-                ll_rw_block(READ,bh);
+        if (!bh->b_uptodate) // 如果缓冲块的内容不更新
+                ll_rw_block(READ,bh); // 发起读请求
+        // 遍历可变参数表，依次取一个参数，直到取到负数作为结束（因为逻辑块号不能为负）
         while ((first=va_arg(args,int))>=0) {
-                tmp=getblk(dev,first);
+                // 注意： 这里也没有强制要求预读块和第一块在链表上有前后关系，以后可以通过hash表快速定位，所以没必要
+                tmp=getblk(dev,first); // 申请空闲缓冲块
                 if (tmp) {
-                        if (!tmp->b_uptodate)
-                                ll_rw_block(READA,bh);
-                        tmp->b_count--;
+                        if (!tmp->b_uptodate) // 申请到的空闲缓冲块内容无效
+                                ll_rw_block(READA,tmp); // 发起读请求
+                        tmp->b_count--; // 暂时释放掉该预读块，因为现在没人使用
                 }
         }
-        va_end(args);
-        wait_on_buffer(bh);
-        if (bh->b_uptodate)
-                return bh;
-        brelse(bh);
-        return (NULL);
+        va_end(args); // 结束遍历可变参数表
+        wait_on_buffer(bh); // 进程进入睡眠，等待第一块缓冲块的读取完毕
+        if (bh->b_uptodate) // 再次判断读入的数据是否有效
+                // 注意：因为现在并不需要预读的那些数据块，所以并没有进入睡眠来等待预读请求全部完成以后才返回
+                return bh; // 有效则直接返回对应的缓冲头指针
+        brelse(bh); // 无效，则释放缓冲块，返回 NULL 
+        return NULL;
 }
 
 /**
