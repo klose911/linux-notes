@@ -184,65 +184,103 @@ int new_block(int dev)
         return j; // 返回实际的逻辑块号
 }
 
+/**
+ * 释放一个内存中的 i节点
+ *
+ * inode ： i节点指针
+ *
+ * 无返回值
+ * 
+ */
 void free_inode(struct m_inode * inode)
 {
         struct super_block * sb;
         struct buffer_head * bh;
-
-        if (!inode)
+        
+        if (!inode) // 首先判断“i节点”指针是否有效
                 return;
-        if (!inode->i_dev) {
-                memset(inode,0,sizeof(*inode));
+        if (!inode->i_dev) { // 判断 i节点的设备域是否为空
+                memset(inode,0,sizeof(*inode)); // 如果该字段为0，说明i节点没有被使用，用'0'来清空'i节点'所占的内存区
                 return;
         }
-        if (inode->i_count>1) {
-                printk("trying to free inode with count=%d\n",inode->i_count);
+        
+        if (inode->i_count>1) { // 如果该 i节点还有其他进程引用，则不能释放
+                printk("trying to free inode with count=%d\n",inode->i_count); // 打印错误信息，内核出错
                 panic("free_inode");
         }
-        if (inode->i_nlinks)
+        if (inode->i_nlinks) // 还有其他文件目录项再使用该节点，也不能释放
                 panic("trying to free inode with links");
-        if (!(sb = get_super(inode->i_dev)))
+
+        // 获得该 i节点对应设备的超级块信息
+        if (!(sb = get_super(inode->i_dev))) // 无法获得对应设备的超级块信息，内核出错，退出
                 panic("trying to free inode on nonexistent device");
-        if (inode->i_num < 1 || inode->i_num > sb->s_ninodes)
+        if (inode->i_num < 1 || inode->i_num > sb->s_ninodes) // 校验该 i节点号是否有效  
                 panic("trying to free inode 0 or nonexistant inode");
-        if (!(bh=sb->s_imap[inode->i_num>>13]))
+        // 每个缓冲块对应 8192个 i节点，因此 i_num>>13 (i_num / 8192) 可以得到对应的 s_imap[] 数组项的小标
+        if (!(bh=sb->s_imap[inode->i_num>>13])) // 位图对应的缓冲块头指针为空，内核出错，退出
                 panic("nonexistent imap in superblock");
-        if (clear_bit(inode->i_num&8191,bh->b_data))
-                printk("free_inode: bit already cleared.\n\r");
-        bh->b_dirt = 1;
-        memset(inode,0,sizeof(*inode));
+
+        // 清理 i节点号在对应的i节点位图中的位
+        // inode->i_num & 8191 ：i节点在“i节点位图对应的缓冲区地址”中的偏移
+        // s_imap: ”i节点位图“对应的缓冲块指针数组
+        // s_imap[inode->i_num>>13] : 因为每个缓冲块有1024字节，相当于8192位，所以以此来获得“i节点块位图”对应的“缓冲块头结构指针”
+        // b_data: 缓冲块头结构对应的真实缓冲块内存指针
+        if (clear_bit(inode->i_num&8191,bh->b_data)) 
+                printk("free_inode: bit already cleared.\n\r"); // 如果位图中该位本来就是0,无法清空一个本来就为空的i节点，因此内核报错，退出
+        bh->b_dirt = 1; // “i节点位图”对应的缓冲块头结构中的“修改标志”置为“真”
+        memset(inode,0,sizeof(*inode)); // 用‘0’来清空 i节点所占的内存！！！
 }
 
+/**
+ * 为设备dev新建一个i节点
+ *
+ * dev： 设备号
+ *
+ * 返回： 成功返回新建并初始化过的 i节点，失败：返回 NULL 
+ * 
+ */
 struct m_inode * new_inode(int dev)
 {
-        struct m_inode * inode;
+        // 注意：这里只分配了 m_inode 指针的内存，这个结构真实的内存，在下面 get_empty_inode() 中才会分配
+        struct m_inode * inode; 
         struct super_block * sb;
         struct buffer_head * bh;
         int i,j;
 
-        if (!(inode=get_empty_inode()))
-                return NULL;
+        // 从“内存空闲i节点表”中获取一个“空闲i节点项”
+        if (!(inode=get_empty_inode())) // 无法从“内存i节点表”中获取到“空闲i节点项”
+                return NULL; // 返回 NULL
+        // 从设备中读入超级块信息
         if (!(sb = get_super(dev)))
                 panic("new_inode with unknown device");
+
         j = 8192;
-        for (i=0 ; i<8 ; i++)
-                if ((bh=sb->s_imap[i]))
-                        if ((j=find_first_zero(bh->b_data))<8192)
-                                break;
-        if (!bh || j >= 8192 || j+i*8192 > sb->s_ninodes) {
-                iput(inode);
-                return NULL;
+        // 扫描超级块中8块对应的“i节点位图”
+        for (i=0 ; i<8 ; i++) {
+                if ((bh=sb->s_imap[i])) {
+                        // 寻找第一个是‘0’的位
+                        if ((j=find_first_zero(bh->b_data))<8192) {
+                                break; //找到退出循环
+                        }
+                }
         }
-        if (set_bit(j,bh->b_data))
+
+        // !bh: 位图无效， j>= 8192: i节点位无效，j+i*8192 > sb->s_ninodes：实际的i节点位超出设备最大的i节点位
+        if (!bh || j >= 8192 || j+i*8192 > sb->s_ninodes) {
+                iput(inode); // 放回先前i节点表中申请的i节点
+                return NULL; // 返回 NULL 
+        }
+        // 设置i节点位图中对应的位为１
+        if (set_bit(j,bh->b_data)) // 该位上面的原值如果是１，内核报错，退出
                 panic("new_inode: bit already set");
-        bh->b_dirt = 1;
-        inode->i_count=1;
-        inode->i_nlinks=1;
-        inode->i_dev=dev;
-        inode->i_uid=current->euid;
-        inode->i_gid=current->egid;
-        inode->i_dirt=1;
-        inode->i_num = j + i*8192;
-        inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
+        bh->b_dirt = 1; // ”i节点位图“对应的”缓冲块头结构“的”修改标志“置为真
+        inode->i_count=1; // i节点被使用次数 = 1
+        inode->i_nlinks=1; // i节点的文件目录项链接数 = １
+        inode->i_dev=dev; // i节点的设备号 = dev 
+        inode->i_uid=current->euid; // i节点的有效用户ID = 当前进程的有效用户ID 
+        inode->i_gid=current->egid; // i节点的有效组ID = 当前进程的有效组ID
+        inode->i_dirt=1; // i节点的已修改标志置为”真“
+        inode->i_num = j + i*8192; // i节点的节点号　= j + i*8192 
+        inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME; // i节点的文件修改时间 = i节点自身修改时间 = i节点自身创建时间 = 当前 UNIX 时间（秒数）
         return inode;
 }
