@@ -60,7 +60,7 @@ void buffer_init(long buffer_end);
 #define SUPER_MAGIC 0x137F // “超级块”魔数
 
 #define NR_OPEN 20 // 进程最多打开的文件数
-#define NR_INODE 32 // 进程最多使用的 i节点 数
+#define NR_INODE 32 // 系统最多使用的i节点数
 #define NR_FILE 64 // 系统最多同时打开的文件个数（文件数组项数）
 #define NR_SUPER 8 // 系统所含最多的超级块个数（超级块数组项数），这意味着系统最多支持挂载8个分区
 #define NR_HASH 307 // 缓冲区 Hash 表数组项数值
