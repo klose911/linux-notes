@@ -122,79 +122,120 @@ void sync_inodes(void)
         }
 }
 
+/*
+ * 文件数据块映射到盘块(block map)
+ *
+ * inode: 文件的i节点指针
+ * block: 文件的数据块号
+ * create: 创建标志(0：不置位，1:置位)，如果该标志置位，则在设备上如果对应的逻辑块不存在，则申请新的磁盘块
+ *
+ * 返回：在设备上对应的盘块号（逻辑块号）
+ * 
+ */
 static int _bmap(struct m_inode * inode,int block,int create)
 {
         struct buffer_head * bh;
         int i;
 
-        if (block<0)
-                panic("_bmap: block<0");
-        if (block >= 7+512+512*512)
+        if (block<0) // 校验数据块号的有效性
+                panic("_bmap: block<0"); // 小于0, 停机
+        if (block >= 7+512+512*512) // 超出文件系统表示范围，停机
                 panic("_bmap: block>big");
+        // 直接使用直接块
         if (block<7) {
-                if (create && !inode->i_zone[block])
+                // 需要创建设备上的盘块 && i节点中对应逻辑块（区段）字段为0
+                if (create && !inode->i_zone[block]) {
                         if ((inode->i_zone[block]=new_block(inode->i_dev))) {
-                                inode->i_ctime=CURRENT_TIME;
-                                inode->i_dirt=1;
+                                inode->i_ctime=CURRENT_TIME; // 设置“i节点修改时间”
+                                inode->i_dirt=1; // 设置i节点的修改标志为“真”
                         }
-                return inode->i_zone[block];
+                }
+                return inode->i_zone[block]; // 返回已经申请的逻辑块号
         }
+        // 6 < block < 7+512：说明使用的是一次间接块号 
         block -= 7;
-        if (block<512) {
-                if (create && !inode->i_zone[7])
+        if (block<512) { 
+                if (create && !inode->i_zone[7]) {
+                        // 如果创建标志置位，则申请一块新的磁盘块来存放一次间接块
                         if ((inode->i_zone[7]=new_block(inode->i_dev))) {
                                 inode->i_dirt=1;
                                 inode->i_ctime=CURRENT_TIME;
                         }
-                if (!inode->i_zone[7])
-                        return 0;
-                if (!(bh = bread(inode->i_dev,inode->i_zone[7])))
-                        return 0;
-                i = ((unsigned short *) (bh->b_data))[block];
-                if (create && !i)
+                }                
+                if (!inode->i_zone[7]) // 存放一次间接块的申请失败 或者 创建标志不置位但是i_zone[7]为0
+                        return 0; // 返回0：表示失败
+                if (!(bh = bread(inode->i_dev,inode->i_zone[7]))) //尝试从磁盘读入”一次间接块“对应的”逻辑块“到”高速缓冲区“
+                        return 0; // 返回0：表示一次间接块的读取失败
+                i = ((unsigned short *) (bh->b_data))[block]; // 文件数据块在一次间接块（高速缓存映射）中对应的数据
+                if (create && !i) // 创建标志置位，并且原来位置上数据为空
+                        // 创建一块新的逻辑块
                         if ((i=new_block(inode->i_dev))) {
                                 ((unsigned short *) (bh->b_data))[block]=i;
-                                bh->b_dirt=1;
+                                bh->b_dirt=1; // 一次间接块的修改标志置位
                         }
-                brelse(bh);
+                brelse(bh); // 释放一次间接块对应的缓冲区
                 return i;
         }
+        // 处理二次间接块
         block -= 512;
         if (create && !inode->i_zone[8])
+                // 设置i节点中的字段值 inode->i_zone[8]：二次间接块中的一级块
                 if ((inode->i_zone[8]=new_block(inode->i_dev))) {
-                        inode->i_dirt=1;
+                        inode->i_dirt=1; //设置i节点的值为已经修改
                         inode->i_ctime=CURRENT_TIME;
                 }
         if (!inode->i_zone[8])
                 return 0;
+        // 读取二次间接块对应的一级块到高速缓存区
         if (!(bh=bread(inode->i_dev,inode->i_zone[8])))
                 return 0;
-        i = ((unsigned short *)bh->b_data)[block>>9];
+        i = ((unsigned short *)bh->b_data)[block>>9]; // 二次间接块的”二级块“在”一级块“上对应位置：block/512
         if (create && !i)
+                // 申请二次间接块对应的二级块
                 if ((i=new_block(inode->i_dev))) {
                         ((unsigned short *) (bh->b_data))[block>>9]=i;
-                        bh->b_dirt=1;
+                        bh->b_dirt=1; // 设置二次间接块的一级块已经被修改
                 }
-        brelse(bh);
+        brelse(bh); // 释放二次间接块的一级块对应的高速缓存区
         if (!i)
                 return 0;
+        // 读取二次间接块对应的二级块到高速缓存区
         if (!(bh=bread(inode->i_dev,i)))
                 return 0;
-        i = ((unsigned short *)bh->b_data)[block&511];
+        i = ((unsigned short *)bh->b_data)[block&511]; // 计算数据块在二次间接块的二级块中对应的位置：(block&511) 
         if (create && !i)
+                // 在设备上创建一块新的盘块号给数据块
                 if ((i=new_block(inode->i_dev))) {
                         ((unsigned short *) (bh->b_data))[block&511]=i;
-                        bh->b_dirt=1;
+                        bh->b_dirt=1; // 二次间接块的二级块对应的i节点设置修改标志
                 }
-        brelse(bh);
+        brelse(bh); // 高速缓存区中释放二次间接块中的二级块
         return i;
 }
 
+/**
+ * 取i节点在设备上对应的逻辑块号
+ *
+ * inode: i节点指针
+ * block: 文件数据块号
+ *
+ * 成功：对应设备上的逻辑块号， 失败：0
+ * 
+ */
 int bmap(struct m_inode * inode,int block)
 {
         return _bmap(inode,block,0);
 }
 
+/**
+ * 取i节点在设备上对应的逻辑块号，如果设备上对应的逻辑块不存在，则创建一块！
+ *
+ * inode: i节点指针
+ * block: 文件数据块号
+ *
+ * 成功：对应设备上的逻辑块号， 失败：0
+ * 
+ */
 int create_block(struct m_inode * inode, int block)
 {
         return _bmap(inode,block,1);
