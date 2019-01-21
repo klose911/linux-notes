@@ -240,51 +240,81 @@ int create_block(struct m_inode * inode, int block)
 {
         return _bmap(inode,block,1);
 }
-		
+
+/**
+ * 放置一个“i节点”（回写入设备）
+ * 
+ * inode: i节点指针
+ *
+ * 无返回值
+ *
+ * 该函数用于把i节点的引用计数减1：
+ * 如果是管道i节点，则唤醒等待的进程，如果是块设备文件，则刷新设备
+ * 如果该节点的链接数为0，则释放该节点占用的所有磁盘逻辑块，并释放该i节点
+ * 
+ */
 void iput(struct m_inode * inode)
 {
-        if (!inode)
+        if (!inode) // i节点为NULL，直接返回
                 return;
-        wait_on_inode(inode);
-        if (!inode->i_count)
-                panic("iput: trying to free free inode");
+        wait_on_inode(inode); // 等待i节点解锁
+        if (!inode->i_count) // 如果该节点的引用计数为0，则表明该节点已经是空闲的 
+                panic("iput: trying to free free inode"); // 内核报错，退出
+
+         // 处理“管道文件”节点
         if (inode->i_pipe) {
-                wake_up(&inode->i_wait);
-                if (--inode->i_count)
+                wake_up(&inode->i_wait); // 唤醒等待该节点的进程
+                if (--inode->i_count) // 如果还有引用，则直接返回
                         return;
-                free_page(inode->i_size);
-                inode->i_count=0;
-                inode->i_dirt=0;
-                inode->i_pipe=0;
+                // 释放i节点对应的内存页面
+                free_page(inode->i_size); // 对于管道节点， i_size 保存了对应的内存地址 
+                inode->i_count=0; // 引用计数为0
+                inode->i_dirt=0; // 复位修改标志 
+                inode->i_pipe=0; // 复位管道标志
                 return;
         }
+
+        // 如果i节点对应的设备号为0：如管道操作的i节点
         if (!inode->i_dev) {
-                inode->i_count--;
+                inode->i_count--; // 引用计数减1，退出
                 return;
         }
+        // 处理块设备文件对应的i节点（注意：不是普通文件，目录，类似于 /dev/fd 这种）
         if (S_ISBLK(inode->i_mode)) {
-                sync_dev(inode->i_zone[0]);
-                wait_on_inode(inode);
+                // 刷新该设备
+                sync_dev(inode->i_zone[0]); // 此时i_zone[0]中保存的是设备号
+                wait_on_inode(inode); // 等待该节点解锁
         }
+        // 处理普通文件，目录等
 repeat:
-        if (inode->i_count>1) {
-                inode->i_count--;
+        if (inode->i_count>1) { // 如果该节点的引用次数大于1
+                inode->i_count--; // 引用次数递减1
+                return; // 因为还有其他进程在引用该节点，所以不能释放，直接退出
+        }
+        // 该节点的引用次数为1（前面已经判断过引用次数是否为0！）
+        if (!inode->i_nlinks) { // 如果该节点的链接次数等于0，说明对应的文件已经被删除
+                truncate(inode); // 释放该节点所对应的所有逻辑块
+                free_inode(inode); // 释放该节点
                 return;
         }
-        if (!inode->i_nlinks) {
-                truncate(inode);
-                free_inode(inode);
-                return;
-        }
+        // 该节点的“修改标志”为“真”
         if (inode->i_dirt) {
+                // 回写该节点
                 write_inode(inode);	/* we can sleep - so do again */
-                wait_on_inode(inode);
-                goto repeat;
+                wait_on_inode(inode); // 睡眠等待回写完成
+                goto repeat; // 睡眠过程中，其他的进程可能还会修改该节点，所以重复进行上述判断
         }
-        inode->i_count--;
+        inode->i_count--; // i节点的引用计数减1
         return;
 }
 
+/**
+ * 从i节点表(inode_table)中获得一个空闲的i节点项
+ *
+ * 无参数
+ *
+ * 返回：一个空闲的i节点项
+ */
 struct m_inode * get_empty_inode(void)
 {
         struct m_inode * inode;
@@ -293,30 +323,33 @@ struct m_inode * get_empty_inode(void)
 
         do {
                 inode = NULL;
+                // 从最后一项开始，遍历i节点表
                 for (i = NR_INODE; i ; i--) {
-                        if (++last_inode >= inode_table + NR_INODE)
-                                last_inode = inode_table;
-                        if (!last_inode->i_count) {
-                                inode = last_inode;
-                                if (!inode->i_dirt && !inode->i_lock)
-                                        break;
+                        if (++last_inode >= inode_table + NR_INODE) // 如果 last_node 已经指向“i节点表”最后一项之后
+                                last_inode = inode_table; // last_node 重新指向“i节点表”
+                        if (!last_inode->i_count) { // 如果 last_node 的引用计数为0：说明已经找到一个空闲的i节点
+                                inode = last_inode; // inode 指向该项
+                                if (!inode->i_dirt && !inode->i_lock) // inode 的修改标志和锁定标志皆没有置位
+                                        break; // 已经找到需要的空节点，退出循环
                         }
                 }
+                // 无法找到一个空的i节点，则打印所有的i节点，并停机
                 if (!inode) {
                         for (i=0 ; i<NR_INODE ; i++)
                                 printk("%04x: %6d\t",inode_table[i].i_dev,
                                        inode_table[i].i_num);
                         panic("No free inodes in mem");
                 }
-                wait_on_inode(inode);
-                while (inode->i_dirt) {
-                        write_inode(inode);
-                        wait_on_inode(inode);
+                wait_on_inode(inode); // 等待该节点解锁（如果又被上锁的话）
+                while (inode->i_dirt) { 
+                        write_inode(inode); // 如果修改标志置位，则把节点回写到高速缓冲区中
+                        wait_on_inode(inode); // 再次等待该节点解锁，因为休眠过程中仍可能再次被修改，所以还需重新循环校验“修改标志”
                 }
-        } while (inode->i_count);
-        memset(inode,0,sizeof(*inode));
-        inode->i_count = 1;
-        return inode;
+        } while (inode->i_count); // 再次校验该节点是否空闲， 如果又被其他进程占用，则再次开始循环寻找一个空闲的节点
+        // 总算找到一个真正空闲的i节点：引用次数为0, 没有修改，没有上锁
+        memset(inode,0,sizeof(*inode)); // 重新设置i节点中的数据
+        inode->i_count = 1; // i节点引用计数为1
+        return inode; 
 }
 
 struct m_inode * get_pipe_inode(void)
@@ -405,28 +438,40 @@ static void read_inode(struct m_inode * inode)
         unlock_inode(inode);
 }
 
+/*
+ * 将i节点信息写入缓冲区
+ *
+ * inode: i节点指针
+ *
+ * 无返回值
+ * 
+ */
 static void write_inode(struct m_inode * inode)
 {
         struct super_block * sb;
         struct buffer_head * bh;
         int block;
 
-        lock_inode(inode);
+        lock_inode(inode); // 锁定该节点
+        // 如果该节点没有修改，或者该节点不属于任何设备
         if (!inode->i_dirt || !inode->i_dev) {
-                unlock_inode(inode);
+                unlock_inode(inode); // 解锁该节点，直接退出
                 return;
         }
-        if (!(sb=get_super(inode->i_dev)))
+        if (!(sb=get_super(inode->i_dev))) // 获得该节点对应的超级块
                 panic("trying to write inode without device");
+        // 该节点所在的设备的逻辑块号 = 2 (启动块 + 超级块) + i节点位图占用块数 + 逻辑块位图占用的块数 + (i节点号 - 1) / 每块含有的i节点数 
         block = 2 + sb->s_imap_blocks + sb->s_zmap_blocks +
-                (inode->i_num-1)/INODES_PER_BLOCK;
-        if (!(bh=bread(inode->i_dev,block)))
+                (inode->i_num-1)/INODES_PER_BLOCK; // 计算该节点所在设备的逻辑块号
+        // 读取“该节点对应的逻辑快”到“高速缓冲区”中
+        if (!(bh=bread(inode->i_dev,block))) // 无法读取对应的逻辑块到高速缓冲区 
                 panic("unable to read i-node block");
+        // 将该节点信息复制到该逻辑块对应的该i节点的项位置处
         ((struct d_inode *)bh->b_data)
                 [(inode->i_num-1)%INODES_PER_BLOCK] =
                 *(struct d_inode *)inode;
-        bh->b_dirt=1;
-        inode->i_dirt=0;
-        brelse(bh);
-        unlock_inode(inode);
+        bh->b_dirt=1; // “高速缓冲区”的“修改标志”置位
+        inode->i_dirt=0; // “i节点”的“修改标志”复位
+        brelse(bh); // 释放高速缓冲区对应的缓冲块
+        unlock_inode(inode); // i节点解锁
 }
