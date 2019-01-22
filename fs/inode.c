@@ -352,69 +352,101 @@ struct m_inode * get_empty_inode(void)
         return inode; 
 }
 
+/**
+ * 获得一个管道节点
+ *
+ * 无参数
+ *
+ * 成功则返回申请到的管道文件的i节点指针，失败返回 NULL
+ * 
+ */
 struct m_inode * get_pipe_inode(void)
 {
         struct m_inode * inode;
 
+        // 尝试从内存的i节点表申请一个空闲i节点
         if (!(inode = get_empty_inode()))
-                return NULL;
+                return NULL; // 申请失败，则返回NULL
+        // 尝试为这个i节点分配一页内存页，分配到的内存页物理地址放入到i节点的i_size域下
         if (!(inode->i_size=get_free_page())) {
+                // 分配失败，则设置i节点的引用计数为0，返回NULL
                 inode->i_count = 0;
-                return NULL;
+                return NULL; 
         }
-        inode->i_count = 2;	/* sum of readers/writers */
-        PIPE_HEAD(*inode) = PIPE_TAIL(*inode) = 0;
-        inode->i_pipe = 1;
+        // i节点的引用计数设为2：读进程和写进程
+        inode->i_count = 2;	/* sum of readers/writers */ 
+        PIPE_HEAD(*inode) = PIPE_TAIL(*inode) = 0; // 管道头指针(i_zone[0])和管道尾指针(i_zone[1])复位
+        inode->i_pipe = 1; // 设置管道标志
         return inode;
 }
 
+/**
+ * 获取一个i节点
+ *
+ * dev: 设备号
+ * nr: i节点号
+ *
+ * 成功返回对应的i节点指针，失败返回
+ * 
+ */
 struct m_inode * iget(int dev,int nr)
 {
         struct m_inode * inode, * empty;
-
-        if (!dev)
+        
+        if (!dev) // 设备号为0：内核报错，退出
                 panic("iget with dev==0");
-        empty = get_empty_inode();
-        inode = inode_table;
+        empty = get_empty_inode(); // 获得一个空闲的i节点指针
+        inode = inode_table; // inode 指向内核i节点表
+        // 遍历“内核i节点表”
         while (inode < NR_INODE+inode_table) {
+                // “内核i节点表”中的i节点与“要获得的i节点”不匹配
                 if (inode->i_dev != dev || inode->i_num != nr) {
                         inode++;
-                        continue;
+                        continue; // 遍历下一个
                 }
-                wait_on_inode(inode);
+                wait_on_inode(inode); // 等待i节点解锁
+                // 再次校验是否匹配
                 if (inode->i_dev != dev || inode->i_num != nr) {
-                        inode = inode_table;
-                        continue;
+                        inode = inode_table; // 重新指向内核i节点表开头
+                        continue; // 从新开始遍历
                 }
-                inode->i_count++;
+                // 到这里表示找到相应的i节点
+                inode->i_count++; // i节点的引用计数加1
+                // 检查i节点是否是另一个文件系统的挂载点
                 if (inode->i_mount) {
+                        // 当前的i节点是另一个文件系统的挂载点
                         int i;
 
+                        // 遍历超级块数组，寻找”被安装文件系统“的”根节点“
                         for (i = 0 ; i<NR_SUPER ; i++)
-                                if (super_block[i].s_imount==inode)
+                                if (super_block[i].s_imount==inode) // s_imount ： 挂载点目录在原文件系统中的“i节点” （类似于/usr 在 / 这个文件系统中的i节点）
                                         break;
+                        // 超级块中无法找到对应的i节点
                         if (i >= NR_SUPER) {
-                                printk("Mounted inode hasn't got sb\n");
+                                printk("Mounted inode hasn't got sb\n"); // 显示出错信息
                                 if (empty)
-                                        iput(empty);
-                                return inode;
+                                        iput(empty); // 放回申请的空闲节点
+                                return inode; // 返回该i节点指针
                         }
-                        iput(inode);
-                        dev = super_block[i].s_dev;
-                        nr = ROOT_INO;
-                        inode = inode_table;
+                        // 执行到这里：已经找到安装到当前i节点的文件系统的超级块
+                        iput(inode); // 将该i节点写盘放回
+                        dev = super_block[i].s_dev; // 设备号为超级块中对应的设备号
+                        nr = ROOT_INO; // i节点号为文件系统的根节点号(1)
+                        inode = inode_table; // inode 重新指向内存节点表，再次循环查找对应的i节点
                         continue;
                 }
-                if (empty)
-                        iput(empty);
-                return inode;
+                // 执行到这里：表示已经在内存i节点表中找到对应的i节点
+                if (empty) 
+                        iput(empty); // 重新放回临时申请的i节点
+                return inode; // 返回已经寻找到的i节点
         }
-        if (!empty)
+        // 执行到这里：在内存i节点表中无法找到对应的i节点
+        if (!empty) // 无法申请一个空闲i节点作为临时i节点
                 return (NULL);
-        inode=empty;
-        inode->i_dev = dev;
-        inode->i_num = nr;
-        read_inode(inode);
+        inode=empty; // inode 指向申请到的临时i节点
+        inode->i_dev = dev; // 设备号 = dev 
+        inode->i_num = nr; // i节点号 = nr 
+        read_inode(inode); // 从设备中读取该i节点信息到高速缓存区中
         return inode;
 }
 
