@@ -261,7 +261,7 @@ void iput(struct m_inode * inode)
         if (!inode->i_count) // 如果该节点的引用计数为0，则表明该节点已经是空闲的 
                 panic("iput: trying to free free inode"); // 内核报错，退出
 
-         // 处理“管道文件”节点
+        // 处理“管道文件”节点
         if (inode->i_pipe) {
                 wake_up(&inode->i_wait); // 唤醒等待该节点的进程
                 if (--inode->i_count) // 如果还有引用，则直接返回
@@ -450,24 +450,35 @@ struct m_inode * iget(int dev,int nr)
         return inode;
 }
 
+/*
+ * 读取指定i节点信息
+ *
+ * inode: i节点指针
+ *
+ * 无返回值
+ * 
+ */
 static void read_inode(struct m_inode * inode)
 {
         struct super_block * sb;
         struct buffer_head * bh;
         int block;
 
-        lock_inode(inode);
-        if (!(sb=get_super(inode->i_dev)))
+        lock_inode(inode); // 锁定i节点
+        // 读取i节点对应设备的超级块信息
+        if (!(sb=get_super(inode->i_dev))) // 读取超级块信息失败，内核报错，退出
                 panic("trying to read inode without dev");
         block = 2 + sb->s_imap_blocks + sb->s_zmap_blocks +
-                (inode->i_num-1)/INODES_PER_BLOCK;
-        if (!(bh=bread(inode->i_dev,block)))
+                (inode->i_num-1)/INODES_PER_BLOCK; // 计算设备上存储该i节点对应的逻辑块号
+        // 读取设备上存储该i节点的逻辑块到高速缓冲区
+        if (!(bh=bread(inode->i_dev,block))) // 读取设备逻辑块失败，内核报错，退出
                 panic("unable to read i-node block");
+        // 读取缓冲区中该i节点信息到 inode 指针指向的地址处
         *(struct d_inode *)inode =
                 ((struct d_inode *)bh->b_data)
                 [(inode->i_num-1)%INODES_PER_BLOCK];
-        brelse(bh);
-        unlock_inode(inode);
+        brelse(bh); // 释放缓冲块
+        unlock_inode(inode); // 解锁i节点 
 }
 
 /*

@@ -19,6 +19,17 @@ int sync_dev(int dev);
 void wait_for_keypress(void);
 
 /* set_bit uses setb, as gas doesn't recognize setc */
+/**
+ * 测试addr地址处偏移bitnr位的位值
+ *
+ * bitnr: 位偏移值
+ * addr: 内存物理地址
+ *
+ */
+// 1. 定义了一个寄存器变量，保存在eax中
+// 2. bt 指令：对偏移位进行测试
+// 3. setb 指令：根据iflags寄存器中的进位标志CF设置al寄存器，如果CF=1，则%al=1，否则%al=0
+// %0: eax(__res), %1: 常量0, %2: bitnr, %3 addr 
 #define set_bit(bitnr,addr) ({ \
 register int __res ; \
 __asm__("bt %2,%3;setb %%al":"=a" (__res):"a" (0),"r" (bitnr),"m" (*(addr))); \
