@@ -254,36 +254,53 @@ static struct super_block * read_super(int dev)
         return s; // 返回超级块指针
 }
 
+/**
+ * 卸载文件系统（系统调用）
+ *
+ * dev_name: 文件系统所在设备的文件名（类似/dev/ha1 ...）
+ *
+ * 成功：返回0，失败：返回错误号
+ *
+ * 1. 根据设备文件名获得设备号
+ * 2. 复位文件系统超级块中的相应字段
+ * 3. 释放超级块和位图所占用的高速缓冲块
+ * 4. 对该设备执行高速缓冲区和设备上的数据的同步操作
+ * 
+ */
 int sys_umount(char * dev_name)
 {
         struct m_inode * inode;
         struct super_block * sb;
         int dev;
 
-        if (!(inode=namei(dev_name)))
-                return -ENOENT;
-        dev = inode->i_zone[0];
-        if (!S_ISBLK(inode->i_mode)) {
-                iput(inode);
-                return -ENOTBLK;
+        // 根据设备文件名找到对应的i节点（为了获取“设备号”：对于块设备文件，设备号在其i节点的i_zone[0]中）
+        if (!(inode=namei(dev_name))) // 无法取得设备对应的i节点
+                return -ENOENT; // 返回错误号：-ENONET
+        dev = inode->i_zone[0]; // 获取设备号
+        if (!S_ISBLK(inode->i_mode)) { // 如果对应的设备号不是块设备
+                iput(inode); // 回写设备文件对应的i节点
+                return -ENOTBLK; // 返回错误号 -ENOTBLK 
         }
-        iput(inode);
-        if (dev==ROOT_DEV)
-                return -EBUSY;
-        if (!(sb=get_super(dev)) || !(sb->s_imount))
-                return -ENOENT;
-        if (!sb->s_imount->i_mount)
-                printk("Mounted inode has i_mount=0\n");
-        for (inode=inode_table+0 ; inode<inode_table+NR_INODE ; inode++)
-                if (inode->i_dev==dev && inode->i_count)
-                        return -EBUSY;
-        sb->s_imount->i_mount=0;
-        iput(sb->s_imount);
-        sb->s_imount = NULL;
-        iput(sb->s_isup);
-        sb->s_isup = NULL;
-        put_super(dev);
-        sync_dev(dev);
+        iput(inode); // 回写设备文件对应的i节点
+        if (dev==ROOT_DEV) // 如果设备对应的是根文件系统
+                return -EBUSY; // 无法卸载根文件系统，返回 -EBUSY
+        // 如果超级块数组无法找到该设备对应的超级块 或 超级块显示该文件系统没有被挂载
+        if (!(sb=get_super(dev)) || !(sb->s_imount)) 
+                return -ENOENT; // 返回出错码 -ENOENT 
+        if (!sb->s_imount->i_mount) // 如果“挂载目录i节点”的“挂载标志“i_mount等于0
+                printk("Mounted inode has i_mount=0\n"); // 显示报错信息
+
+        // 遍历内存中的i节点数组，查找是否有进程还在使用该设备
+        for (inode=inode_table ; inode<inode_table+NR_INODE ; inode++)
+                if (inode->i_dev==dev && inode->i_count) // i节点的设备号 == 要卸载的设备号 并且 i节点的引用计数 != 0 
+                        return -EBUSY; // 返回“设备正忙”的错误号：-EBUSY
+        sb->s_imount->i_mount=0; // 复位“挂载目录i节点”的“挂载标志”
+        iput(sb->s_imount); // 放回“挂载目录i节点”
+        sb->s_imount = NULL; // 重置超级块的s_imount域
+        iput(sb->s_isup); // 放回被安装系统的根i节点
+        sb->s_isup = NULL; // 重置超级块的s_isup域（被安装系统的根i节点指针）
+        put_super(dev); // 释放该设备的超级块和位图所占用的高速缓冲块
+        sync_dev(dev); // 同步该设备的高速缓冲块和设备上的数据块
         return 0;
 }
 
