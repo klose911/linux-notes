@@ -53,7 +53,7 @@ void buffer_init(long buffer_end);
 #define MINOR(a) ((a)&0xff) // 取低字节，次设备号
 
 #define NAME_LEN 14 // 名字长度值
-#define ROOT_INO 1 // 根 i节点
+#define ROOT_INO 1 // 根i节点
 
 #define I_MAP_SLOTS 8 // “i节点位图”槽数
 #define Z_MAP_SLOTS 8 // “逻辑块位图”槽数

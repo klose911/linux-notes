@@ -58,19 +58,33 @@
  * I don't know if we should look at just the euid or both euid and
  * uid, but that should be easily changed.
  */
+
+/*
+ * 检查文件访问权限
+ *
+ * m_inode: 文件的i节点指针
+ * mask: 访问属性屏蔽码
+ *
+ * 许可：返回 1，不许可：返回 0
+ * 
+ */
 static int permission(struct m_inode * inode,int mask)
 {
         int mode = inode->i_mode;
 
 /* special case: not even root can read/write a deleted file */
-        if (inode->i_dev && !inode->i_nlinks)
-                return 0;
-        else if (current->euid==inode->i_uid)
-                mode >>= 6;
-        else if (current->egid==inode->i_gid)
-                mode >>= 3;
+        if (inode->i_dev && !inode->i_nlinks) // 如果该i节点有对应的设备，但是硬链接引用计数为0（该文件已经被删除）
+                return 0; // 哪怕是 root 用户，也不允许访问被删除的文件
+        else if (current->euid==inode->i_uid) // 当前进程的 euid 等于 文件的宿主用户id
+                mode >>= 6; // 取文件宿主的访问权限
+        else if (current->egid==inode->i_gid) // 当前进程的 egid 等于 文件的组id
+                mode >>= 3; // 取文件的组访问权限
+        // 判断获得的权限是否和屏蔽码匹配 或者“当前进程的euid”是root用户
+        // 假设 mode 为5（可读，可执行），访问属性的屏蔽码是4（读取）
+        // (5 & 4 & 0007) 的结果为4
+        // 注意：0007用来屏蔽掉第4位开始的位！！！
         if (((mode & mask & 0007) == mask) || suser())
-                return 1;
+                return 1; // 允许访问
         return 0;
 }
 
@@ -81,14 +95,34 @@ static int permission(struct m_inode * inode,int mask)
  *
  * NOTE! unlike strncmp, match returns 1 for success, 0 for failure.
  */
+
+/*
+ * 指定长度字符串比较函数
+ *
+ * len: 字符串长度
+ * name: 文件名指针
+ * de: 目录项结构指针
+ *
+ * 匹配：返回 1，不匹配：返回 0
+ *
+ * 注意：返回值和strncmp正好相反
+ * 
+ */
 static int match(int len,const char * name,struct dir_entry * de)
 {
         register int same ;
 
-        if (!de || !de->inode || len > NAME_LEN)
-                return 0;
-        if (len < NAME_LEN && de->name[len])
-                return 0;
+        // 判断参数的有效性
+        if (!de || !de->inode || len > NAME_LEN) // 目录项指针为空 或者 目录项对应的i节点为空 或者 比较的字符串长度 > 文件名可允许长度
+                return 0; // 直接返回0 
+        if (len < NAME_LEN && de->name[len]) // 字符串长度小于 NAME_LEN 但是 de->name[len]是一个非 NULL的普通字符
+                return 0; // 不匹配返回0
+        // 使用嵌入式汇编进行快速比较操作
+        // 在用户空间的 fs 段执行字符串比较操作
+        // %0 - eax(比较结果 sum), %1 - eax初始值(0), %2 - esi(指针: name), %3 - edi（目录项的名字指针：de->name）, %4 - ecx（比较的字符串长度：len）
+        // 1. 'cld;' : 清方向标志位
+        // 'fs; repe; cmpsb;' : 用户空间执行循环比较 [esi++] 和 [edi++]
+        // 'setz %al' : 如果比较结果一样，zf=0, 则置 al=1（也就是 same 为1）
         __asm__("cld\n\t"
                 "fs ; repe ; cmpsb\n\t"
                 "setz %%al"
@@ -109,6 +143,21 @@ static int match(int len,const char * name,struct dir_entry * de)
  * This also takes care of the few special cases due to '..'-traversal
  * over a pseudo-root and a mount point.
  */
+
+/*
+ * 查找“指定目录和文件名”的目录项
+ *
+ * *dir: 指定目录i节点的指针
+ * name: 文件名
+ * namelen: 文件名长度
+ * *res_dir: 目录项结构的指针（作为结果返回）
+ *
+ * 查找成功：返回函数高速缓冲区的指针，并在 *res_dir处返回“目录项结构指针”，失败：返回NULL
+ *
+ * 该函数在“指定目录的数据”（文件）中搜索“指定文件名的目录项“，并对指定文件名为'..'根据当前进行的相关设置做特殊处理
+ * 注意：这个函数并不会读取目录项对应的i节点，如果需要的化必须手动读取!!!
+ * 
+ */
 static struct buffer_head * find_entry(struct m_inode ** dir,
                                        const char * name, int namelen, struct dir_entry ** res_dir)
 {
@@ -118,58 +167,75 @@ static struct buffer_head * find_entry(struct m_inode ** dir,
         struct dir_entry * de;
         struct super_block * sb;
 
+        // 文件名是否要截短
 #ifdef NO_TRUNCATE
-        if (namelen > NAME_LEN)
+        if (namelen > NAME_LEN) // 不需要截短，而且文件名长度 > NAME_LEN，直接返回 NULL 
                 return NULL;
 #else
         if (namelen > NAME_LEN)
-                namelen = NAME_LEN;
+                namelen = NAME_LEN; // 反之文件名长度设置为 NAME_LEN 
 #endif
-        entries = (*dir)->i_size / (sizeof (struct dir_entry));
-        *res_dir = NULL;
-        if (!namelen)
+        // 目录i节点的i_size含有本目录包含的数据长度，因此除以一个目录项的长度（16字节），即可得到该目录所包含有的”目录项数目“
+        entries = (*dir)->i_size / (sizeof (struct dir_entry)); // 计算本目录中包含的目录项的项数
+        *res_dir = NULL; // 设置”返回的目录项结构指针“(*res_dir)为 NULL 
+        if (!namelen) // 如果文件名字符串长度为0，直接返回 NULL 
                 return NULL;
 /* check for '..', as we might have to do some "magic" for it */
-        if (namelen==2 && get_fs_byte(name)=='.' && get_fs_byte(name+1)=='.') {
+        // 接下对文件名为 '..' 做特殊处理
+        if (namelen==2 && get_fs_byte(name)=='.' && get_fs_byte(name+1)=='.') { // 
 /* '..' in a pseudo-root results in a faked '.' (just change namelen) */
-                if ((*dir) == current->root)
+                // 如果”指定目录“等于”当前进程的根目录“，对于本进程来说指定目录就是它的伪根目录
+                // 因为本进程无法访问它的工作根目录的父目录，所以这里只是简单的把 '..' 当做 '.'
+                if ((*dir) == current->root) 
                         namelen=1;
+                // 如果”指定目录的i节点“等于 ROOT_INO(1)的话，说明要指定目录是一个挂载点的父目录！！！ 
                 else if ((*dir)->i_num == ROOT_INO) {
 /* '..' over a mount-point results in 'dir' being exchanged for the mounted
    directory-inode. NOTE! We set mounted, so that we can iput the new dir */
-                        sb=get_super((*dir)->i_dev);
-                        if (sb->s_imount) {
-                                iput(*dir);
-                                (*dir)=sb->s_imount;
-                                (*dir)->i_count++;
+                        sb=get_super((*dir)->i_dev); // 获得该文件系统的超级块
+                        if (sb->s_imount) { // 如果该文件系统已经被挂载
+                                iput(*dir); // 放回”指定目录的i节点“
+                                (*dir)=sb->s_imount; // ”指定目录的i节点指针“指向”被挂载文件系统对应的目录i节点“上
+                                (*dir)->i_count++; // 并且”被挂载文件系统对应的目录i节点“的引用计数加1（因为设置了mounted标志，所以可以进行”偷粱换柱“）
                         }
                 }
         }
-        if (!(block = (*dir)->i_zone[0]))
+
+        // 查找文件名的目录项，为此需要读取目录的数据：取出”目录i节点“对应”块设备数据区“中信息（逻辑块信息）
+        // 读取“目录i节点”对应的“数据区”的“第一个逻辑块号”
+        if (!(block = (*dir)->i_zone[0])) // 第一个逻辑块号为0，该目录不包含任何数据,直接返回 NULL
+                return NULL; 
+        // 读取”目录i节点“对应的“数据区”中“第一个逻辑块”信息到高速缓冲区
+        if (!(bh = bread((*dir)->i_dev,block))) // 读取逻辑块失败，直接返回 NULL 
                 return NULL;
-        if (!(bh = bread((*dir)->i_dev,block)))
-                return NULL;
+
+        // 在目录数据区查找对应文件名的目录项结构
         i = 0;
-        de = (struct dir_entry *) bh->b_data;
-        while (i < entries) {
-                if ((char *)de >= BLOCK_SIZE+bh->b_data) {
-                        brelse(bh);
-                        bh = NULL;
-                        if (!(block = bmap(*dir,i/DIR_ENTRIES_PER_BLOCK)) ||
-                            !(bh = bread((*dir)->i_dev,block))) {
-                                i += DIR_ENTRIES_PER_BLOCK;
-                                continue;
+        de = (struct dir_entry *) bh->b_data; // 让 de 指向缓冲区的数据部分开头
+        while (i < entries) { // 不超过该目录区所拥有的目录项数
+                if ((char *)de >= BLOCK_SIZE+bh->b_data) { // de 已经超过一个逻辑块的数据长度（1024字节）：当前缓冲块已经搜索完毕
+                        brelse(bh); // 释放缓冲块
+                        bh = NULL; // 缓冲块指针指向空
+                        
+                        // 读取该目录数据区的下一个逻辑块
+                        // i/DIR_ENTRIES_PER_BLOCK : 计算当前目录项对应的数据块号
+                        // bmap: 根据数据块号来计算对应的逻辑块号
+                        if (!(block = bmap(*dir,i/DIR_ENTRIES_PER_BLOCK)) || // 计算当前目录项的逻辑块号失败
+                            !(bh = bread((*dir)->i_dev,block))) {  // 读取当前目录项的逻辑块对应的数据块到高速缓冲区失败
+                                i += DIR_ENTRIES_PER_BLOCK; // 跳过一个数据块的目录项个数
+                                continue; // 重新开始循环
                         }
-                        de = (struct dir_entry *) bh->b_data;
+                        // 成功读取目录数据区的下一个逻辑块到高速缓冲区
+                        de = (struct dir_entry *) bh->b_data; // 重新让 de 指向缓冲区的数据部分开头
                 }
-                if (match(namelen,name,de)) {
-                        *res_dir = de;
-                        return bh;
+                if (match(namelen,name,de)) { // 目录项结构指针de的文件名字段和 name 匹配
+                        *res_dir = de; //  *res_dir 设置为 de 
+                        return bh; // 返回对应的高速缓冲块指针
                 }
-                de++;
-                i++;
+                de++; // 指向下一个目录项
+                i++; // 目录项的个数递增 1 
         }
-        brelse(bh);
+        brelse(bh); // 没有找到对应文件名的目录项，释放高速缓冲块，返回 NULL 
         return NULL;
 }
 
