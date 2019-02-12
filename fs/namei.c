@@ -152,7 +152,7 @@ static int match(int len,const char * name,struct dir_entry * de)
  * namelen: 文件名长度
  * *res_dir: 目录项结构的指针（作为结果返回）
  *
- * 查找成功：返回函数高速缓冲区的指针，并在 *res_dir处返回“目录项结构指针”，失败：返回NULL
+ * 查找成功：返回高速缓冲区的指针，并在 *res_dir处返回“目录项结构指针”，失败：返回NULL
  *
  * 该函数在“指定目录的数据”（文件）中搜索“指定文件名的目录项“，并对指定文件名为'..'根据当前进行的相关设置做特殊处理
  * 注意：这个函数并不会读取目录项对应的i节点，如果需要的化必须手动读取!!!
@@ -249,9 +249,25 @@ static struct buffer_head * find_entry(struct m_inode ** dir,
  * may not sleep between calling this and putting something into
  * the entry, as someone else might have used it while you slept.
  */
+
+/*
+ * 在指定目录中添加指定文件名的目录项
+ *
+ * *dir: 指定目录i节点的指针
+ * name: 文件名
+ * namelen: 文件名长度
+ * *res_dir: 目录项结构的指针（作为结果返回）
+ *
+ * 添加成功：返回高速缓冲区的指针，并在 *res_dir处返回“目录项结构指针”，失败：返回NULL
+ *
+ * 注意：'de'（添加的目录项结构指针）的inode部分被设置为了0，这意味着在调用本函数和往目录项写入信息的间隙内进程无法休眠，否则其他的进程可能会使用该目录项！！！
+ * 
+ */
 static struct buffer_head * add_entry(struct m_inode * dir,
                                       const char * name, int namelen, struct dir_entry ** res_dir)
 {
+        // 下面逻辑和find_entry基本一致
+        // 注意：这里不考虑 '..'的特殊处理
         int block,i;
         struct buffer_head * bh;
         struct dir_entry * de;
@@ -272,10 +288,14 @@ static struct buffer_head * add_entry(struct m_inode * dir,
                 return NULL;
         i = 0;
         de = (struct dir_entry *) bh->b_data;
+
+        //遍历目录项，寻找最后未使用的空目录项
         while (1) {
                 if ((char *)de >= BLOCK_SIZE+bh->b_data) {
                         brelse(bh);
                         bh = NULL;
+                        // 注意：这里使用 create_block()函数，而不是 bmap()
+                        // 如果该块不存在则创建一块！！！
                         block = create_block(dir,i/DIR_ENTRIES_PER_BLOCK);
                         if (!block)
                                 return NULL;
@@ -285,23 +305,28 @@ static struct buffer_head * add_entry(struct m_inode * dir,
                         }
                         de = (struct dir_entry *) bh->b_data;
                 }
-                if (i*sizeof(struct dir_entry) >= dir->i_size) {
-                        de->inode=0;
-                        dir->i_size = (i+1)*sizeof(struct dir_entry);
-                        dir->i_dirt = 1;
-                        dir->i_ctime = CURRENT_TIME;
+                // 当前操作的目录项序号 * 目录项结构的大小 已经超过该目录i节点中其数据段的长度值(dir->i_size)
+                // 这意味着已经搜索到目录项数据区的最后：整个目录文件没有由于删除文件留下的空目录项，因此只能把添加的文件放在目录数据区的最末尾
+                if (i * sizeof(struct dir_entry) >= dir->i_size) { 
+                        de->inode=0; // ”目录项的i节点域“设置为空
+                        dir->i_size = (i+1) * sizeof(struct dir_entry); // 目录数据段长度增加一个目录项结构的大小（16字节）
+                        dir->i_dirt = 1; // ”目录i节点“的”修改标志“置位
+                        dir->i_ctime = CURRENT_TIME; // 设置”目录i节点“的”修改时间“
                 }
+                
+                // 如果当前目录项的i节点域为空：表示找到一个空的目录项 或是 刚添加的新目录项，现在可以开始设置目录项信息
                 if (!de->inode) {
-                        dir->i_mtime = CURRENT_TIME;
+                        dir->i_mtime = CURRENT_TIME; // ”目录i节点的修改时间“为当前时间
                         for (i=0; i < NAME_LEN ; i++)
-                                de->name[i]=(i<namelen)?get_fs_byte(name+i):0;
-                        bh->b_dirt = 1;
-                        *res_dir = de;
-                        return bh;
+                                de->name[i]=(i<namelen)?get_fs_byte(name+i):0; // 设置目录项的name域（文件名）
+                        bh->b_dirt = 1; // ”缓冲块的修改标志“置位
+                        *res_dir = de; // 用于返回的”目录项二级指针“ (*res_dir) 指向该目录项指针(de) 
+                        return bh; // 返回缓冲块结构指针
                 }
-                de++;
-                i++;
+                de++; // 指向下一个目录项结构
+                i++; // 目录项序号递增
         }
+        // 实际上这里执行不到 :-) 
         brelse(bh);
         return NULL;
 }
@@ -312,6 +337,8 @@ static struct buffer_head * add_entry(struct m_inode * dir,
  * Getdir traverses the pathname until it hits the topmost directory.
  * It returns NULL on failure.
  */
+
+
 static struct m_inode * get_dir(const char * pathname)
 {
         char c;
