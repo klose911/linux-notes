@@ -135,7 +135,7 @@ struct m_inode {
         unsigned short i_zone[9];
 /* these are in memory also */
         struct task_struct * i_wait; // 等待该i节点的进程
-        unsigned long i_atime; // i节点自身修改时间
+        unsigned long i_atime; // i节点自身被访问时间
         unsigned long i_ctime; // i节点自身创建时间
         unsigned short i_dev; // i节点所在的设备号
         unsigned short i_num; // i节点号

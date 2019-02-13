@@ -338,7 +338,14 @@ static struct buffer_head * add_entry(struct m_inode * dir,
  * It returns NULL on failure.
  */
 
-
+/*
+ * 搜寻指定路径名的目录（或文件）对应的i节点
+ *
+ * pathname: 路径名
+ *
+ * 成功：返回目录（或文件）对应的i节点指针，失败：返回 NULL
+ * 
+ */
 static struct m_inode * get_dir(const char * pathname)
 {
         char c;
@@ -348,38 +355,56 @@ static struct m_inode * get_dir(const char * pathname)
         int namelen,inr,idev;
         struct dir_entry * de;
 
-        if (!current->root || !current->root->i_count)
-                panic("No root inode");
-        if (!current->pwd || !current->pwd->i_count)
-                panic("No cwd inode");
-        if ((c=get_fs_byte(pathname))=='/') {
-                inode = current->root;
-                pathname++;
-        } else if (c)
-                inode = current->pwd;
-        else
-                return NULL;	/* empty name is bad */
-        inode->i_count++;
+        // 判断参数有效性
+        if (!current->root || !current->root->i_count) // 当前进程的根目录i节点为空 或 当前进程的根目录i节点的引用计数为0
+                panic("No root inode"); // 报错，死机
+        if (!current->pwd || !current->pwd->i_count) // 当前进程的工作目录i节点为空 或 当前进程的工作目录i节点的引用计数为0
+                panic("No cwd inode"); // 报错，死机
+        // 如果用户指定的路径名的第一个字符是'/'，则说明路径名是绝对路径
+        if ((c=get_fs_byte(pathname))=='/') { 
+                inode = current->root; // 从当前进程的根目录对应的i节点开始
+                pathname++; // 删除路径名的第一个字符'/'，保证当前进程只能以其设定的根i节点作为搜索的起始
+        } else if (c) 
+                inode = current->pwd; // 从当前进程的工作目录对应的i节点开始
+        else // 路径名为空，直接返回 NULL 
+                return NULL;	/* empty name is bad */ 
+        inode->i_count++; // inode的引用计数 + 1
+
+        // 针对路径名中的各个目录名部分和文件名进行循环处理
         while (1) {
-                thisname = pathname;
-                if (!S_ISDIR(inode->i_mode) || !permission(inode,MAY_EXEC)) {
-                        iput(inode);
-                        return NULL;
+                thisname = pathname; // thisname 指向当前正在处理的目录部分
+                // 判断正在处理的目录部分是否有权限
+                if (!S_ISDIR(inode->i_mode) || !permission(inode,MAY_EXEC)) { // 当前的i节点不是目录 或者 当前目录对应的i节点没有可执行权限
+                        iput(inode); // 释放i节点
+                        return NULL; // 返回 NULL 
                 }
+
+                // 每次循环处理路径名中的一个目录名（或文件名）部分
+                // 从当前路径名开始循环，直到找到一个结尾符(NULL)或者'/'
+                // 此时: 变量namelen正好是当前处理目录名（文件名）部分的长度，而thisname正好指向当前处理目录名（文件名）部分的开始处
                 for(namelen=0;(c=get_fs_byte(pathname++))&&(c!='/');namelen++)
                         /* nothing */ ;
+                // 如果 c == 0 （c字符是结尾符），说明已经读到最后
                 if (!c)
-                        return inode;
-                if (!(bh = find_entry(&inode,thisname,namelen,&de))) {
-                        iput(inode);
-                        return NULL;
+                        // 注意：如果pathname中最后部分也是一个目录名，但没有以'/'结尾，不会返回最后一个目录名对应的i节点
+                        // 假如 pathname 是"/usr/src/linux"，返回的不是linux目录对应的i节点，而是src目录对应的i节点！！！
+                        return inode; // 返回“文件所身处的目录”对应的“i节点结构“指针
+
+                // 在inode节点中寻找thisname路径名，长度为namelen的目录项
+                // 寻找到的目录项结构指针保存在'&de'中
+                if (!(bh = find_entry(&inode,thisname,namelen,&de))) { // 无法找到路径名所对应的目录项
+                        iput(inode); // 放回当前i节点
+                        return NULL; // 返回 NULL
                 }
-                inr = de->inode;
-                idev = inode->i_dev;
-                brelse(bh);
-                iput(inode);
-                if (!(inode = iget(idev,inr)))
-                        return NULL;
+                inr = de->inode; // 取出目录项的i节点号
+                idev = inode->i_dev; // 取出当前i节点的设备号
+                brelse(bh); // 释放包含目录项的高速缓冲块
+                iput(inode); // 释放当前i节点
+                // 从找到的目录项对应的i节点号中取出i节点
+                // 注意：当前这种处理方式没有考虑支持”不同设备号“的情况，实际情况中”软链接“是可以跨越不同文件系统的！！！
+                if (!(inode = iget(idev,inr))) // 无法取出想要的i节点
+                        return NULL; // 返回 NULL
+                //...进入下一个循环，处理路径名的下一部分
         }
 }
 
@@ -389,6 +414,17 @@ static struct m_inode * get_dir(const char * pathname)
  * dir_namei() returns the inode of the directory of the
  * specified name, and the name within that directory.
  */
+
+/*
+ * 返回指定目录名的最末端目录对应的i节点指针
+ *
+ * pathname: 路径名
+ * namelen: 最末端目录的名字长度（作为结果返回）
+ * name: 最末端目录的名字（作为结果返回）
+ *
+ * 成功：返回指定目录名的”最末端目录“对应的”i节点指针“和”最末端目录”的长度和名字，失败：返回 NULL
+ *
+ */
 static struct m_inode * dir_namei(const char * pathname,
                                   int * namelen, const char ** name)
 {
@@ -396,15 +432,19 @@ static struct m_inode * dir_namei(const char * pathname,
         const char * basename;
         struct m_inode * dir;
 
-        if (!(dir = get_dir(pathname)))
-                return NULL;
-        basename = pathname;
+        // 取得指定路径名的最末端目录的i节点指针
+        if (!(dir = get_dir(pathname))) // 获得路径名对应的最末端目录的i节点指针失败
+                return NULL; // 直接返回空
+        basename = pathname; // basename 指向 pathname
+        // 遍历pathname: 每次遇见'/'字符，则截短pathname
+        // 循环结束：basename正好指向路径名最末端目录的前一个字符('/')
         while ((c=get_fs_byte(pathname++)))
                 if (c=='/')
                         basename=pathname;
-        *namelen = pathname-basename-1;
-        *name = basename;
-        return dir;
+        *namelen = pathname-basename-1; // 去掉c指向的‘/’
+        *name = basename; // *name指向basename 
+        return dir; // 返回最末端目录的i节点指针
+        // 注意：假如pathname是"/usr/src/linux/" ，返回的是linux目录对应的i节点指针，最末端部分的长度为0，名字为空
 }
 
 /*
@@ -414,6 +454,15 @@ static struct m_inode * dir_namei(const char * pathname,
  * Open, link etc use their own routines, but this is enough for things
  * like 'chmod' etc.
  */
+
+/**
+ * 获取指定路径名对应的i节点指针
+ *
+ * pathname: 路径名
+ *
+ * 成功：返回对应的i节点指针，失败：返回 NULL
+ * 
+ */
 struct m_inode * namei(const char * pathname)
 {
         const char * basename;
@@ -422,23 +471,27 @@ struct m_inode * namei(const char * pathname)
         struct buffer_head * bh;
         struct dir_entry * de;
 
-        if (!(dir = dir_namei(pathname,&namelen,&basename)))
-                return NULL;
+        // 查找指定路径名的最末端部分的i节点指针
+        if (!(dir = dir_namei(pathname,&namelen,&basename))) // 无法搜索到对应的i节点指针
+                return NULL; // 返回 NULL
+        // 最末端部分的长度为0，则表示最末端部分就是一个目录，直接返回找到的i节点指针
         if (!namelen)			/* special case: '/usr/' etc */
                 return dir;
-        bh = find_entry(&dir,basename,namelen,&de);
-        if (!bh) {
-                iput(dir);
-                return NULL;
+        // 在”最末端目录“中寻找”指定文件名“的i节点指针
+        bh = find_entry(&dir,basename,namelen,&de); 
+        if (!bh) { // 无法找到对应的i节点指针
+                iput(dir); // 释放最末端目录对应的i节点
+                return NULL; // 返回 NULL
         }
-        inr = de->inode;
-        dev = dir->i_dev;
-        brelse(bh);
-        iput(dir);
-        dir=iget(dev,inr);
-        if (dir) {
-                dir->i_atime=CURRENT_TIME;
-                dir->i_dirt=1;
+        
+        inr = de->inode; // 获得”指定文件名“对应的”目录项“中的i节点号 
+        dev = dir->i_dev; // 获得末端目录对应的设备号
+        brelse(bh); // 释放包含指定文件名对应目录项的高速缓冲块
+        iput(dir); // 释放最末端目录对应的i节点
+        dir=iget(dev,inr); // 从设备读取指定文件的i节点
+        if (dir) { // 读取成功
+                dir->i_atime=CURRENT_TIME; // 设置i节点的被访问时间为当前时间
+                dir->i_dirt=1; // 设置i节点的修改标志
         }
         return dir;
 }
