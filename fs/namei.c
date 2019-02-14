@@ -501,6 +501,20 @@ struct m_inode * namei(const char * pathname)
  *
  * namei for open - this is in fact almost the whole open-routine.
  */
+
+/**
+ * 文件打开namei函数
+ *
+ * pathname: 路径名
+ * flag: 打开文件标志
+ *       O_RDONLY: 只读， O_WRONLY: 只写，O_RDWR: 读写，O_CREAT: 文件不存在则创建，O_EXCL: 被创建文件必须不存在，O_APPEND：文件末尾追加
+ * mode: 指定文件的许可属性
+ *       S_IRWXU: 文件宿主具有读、写和可执行权限，S_IRUSR: 文件宿主具有读权限，S_IRWXG: 组成员具有读、写和执行权限 ...
+ * *res_inode: 打开的文件对应的i节点指针（作为结果返回）
+ *
+ * 成功：返回 0 和 *res_inode，失败：返回错误码
+ * 
+ */
 int open_namei(const char * pathname, int flag, int mode,
                struct m_inode ** res_inode)
 {
@@ -510,70 +524,81 @@ int open_namei(const char * pathname, int flag, int mode,
         struct buffer_head * bh;
         struct dir_entry * de;
 
+        // 如果文件访问模式是只读(0), 但 O_TRUNC 被置位，则文件打开标志必须添加 O_WRONLY（只写）
         if ((flag & O_TRUNC) && !(flag & O_ACCMODE))
-                flag |= O_WRONLY;
+                flag |= O_WRONLY; // O_TRUNC 必须在文件可写情况下才有效
+
+        // 使用当前进程的文件访问许可屏蔽码，屏蔽掉给定模式中的相应位
         mode &= 0777 & ~current->umask;
+        // 添加普通文件的标志位，将用于万一文件不存在而需要创建时，作为新文件的默认属性
         mode |= I_REGULAR;
-        if (!(dir = dir_namei(pathname,&namelen,&basename)))
-                return -ENOENT;
+        // 查找对应路径名的最末端目录对应的i节点
+        if (!(dir = dir_namei(pathname,&namelen,&basename))) // 查找失败
+                return -ENOENT; // 返回错误号 ENOENT
+        // namelen == 0: 表示路径名的最末端是一个目录名 
         if (!namelen) {			/* special case: '/usr/' etc */
-                if (!(flag & (O_ACCMODE|O_CREAT|O_TRUNC))) {
-                        *res_inode=dir;
-                        return 0;
+                // 如果操作不是“读写”，“创建”，“截断”，则是一个打开目录名文件的操作
+                if (!(flag & (O_ACCMODE|O_CREAT|O_TRUNC))) { // O_ACCMODE: 读写， O_CREAT: 创建， O_TRUNC: 截断
+                        *res_inode=dir; // 直接返回最末端目录对应的i节点
+                        return 0; // 成功返回 0 
                 }
-                iput(dir);
-                return -EISDIR;
+                iput(dir); // 操作非法，释放对应的i节点
+                return -EISDIR; // 返回 EISDIR 
         }
+        // 在dir目录的所有目录项中寻找文件名为basename, 文件长度为namelen的目录项
         bh = find_entry(&dir,basename,namelen,&de);
-        if (!bh) {
-                if (!(flag & O_CREAT)) {
-                        iput(dir);
-                        return -ENOENT;
+        if (!bh) { // 无法找到对应的目录项
+                if (!(flag & O_CREAT)) { // O_CREAT 标志未置位
+                        iput(dir); // 操作非法，释放对应的i节点
+                        return -ENOENT; // 返回错误号 ENOENT
                 }
-                if (!permission(dir,MAY_WRITE)) {
-                        iput(dir);
-                        return -EACCES;
+                if (!permission(dir,MAY_WRITE)) { // 当前进程对dir目录没有写权限
+                        iput(dir); // 操作非法，释放对应的i节点
+                        return -EACCES; // 返回错误号 EACCES
                 }
-                inode = new_inode(dir->i_dev);
-                if (!inode) {
-                        iput(dir);
-                        return -ENOSPC;
+                inode = new_inode(dir->i_dev); // 在dir目录对应的设备上申请一个新的i节点
+                if (!inode) { // 申请新的i节点失败
+                        iput(dir); // 释放目录的i节点
+                        return -ENOSPC; // 返回错误号 ENOSPC
                 }
-                inode->i_uid = current->euid;
-                inode->i_mode = mode;
-                inode->i_dirt = 1;
-                bh = add_entry(dir,basename,namelen,&de);
-                if (!bh) {
-                        inode->i_nlinks--;
-                        iput(inode);
-                        iput(dir);
-                        return -ENOSPC;
+                inode->i_uid = current->euid; // 设置“申请的i节点”的“用户ID”为”当前进程的有效用户ID“
+                inode->i_mode = mode; // 设置“申请的i节点”的“文件类型和属性”为 mode 
+                inode->i_dirt = 1; // 置位“申请的i节点”的”修改标志“
+                bh = add_entry(dir,basename,namelen,&de); // dir目录中增加文件的目录项
+                if (!bh) { // 增加目录项失败
+                        inode->i_nlinks--; // 新i节点的引用计数减1
+                        iput(inode); // 释放新申请的i节点
+                        iput(dir); // 释放最末端目录的i节点
+                        return -ENOSPC; // 返回错误号 ENOSPC
                 }
-                de->inode = inode->i_num;
-                bh->b_dirt = 1;
-                brelse(bh);
-                iput(dir);
-                *res_inode = inode;
-                return 0;
+                de->inode = inode->i_num; // ”增加的目录项“的”i节点域“设置为”新申请的i节点号“
+                bh->b_dirt = 1; // 置位包含目录i节点的缓冲块的”修改标志“
+                brelse(bh); // 释放包含目录i节点的缓冲块
+                iput(dir); // 释放目录项的i节点
+                *res_inode = inode; // 作为结果返回刚申请的i节点结构指针 
+                return 0; // 返回0,作为成功标志
         }
-        inr = de->inode;
-        dev = dir->i_dev;
-        brelse(bh);
-        iput(dir);
-        if (flag & O_EXCL)
+        // 执行到这里，说明找到路径名对应的目录项
+        inr = de->inode; // 读取目录项中的i节点号
+        dev = dir->i_dev; // 读取目录项中的设备号
+        brelse(bh); // 释放包含目录i节点的缓冲块
+        iput(dir); // 释放目录项的i节点
+        if (flag & O_EXCL) // 文件打开标志 O_EXCL 被置位，然后文件已经存在，返回 EEXIST 表示出错
                 return -EEXIST;
-        if (!(inode=iget(dev,inr)))
-                return -EACCES;
+        // 从设备读取目录项中i节点号，对应的i节点
+        if (!(inode=iget(dev,inr))) // 读取i节点出错
+                return -EACCES; // 返回 EACCES
+        // (”i节点是目录“并且访问模式是”只写“或”读写“) 或者”没有文件访问权限“
         if ((S_ISDIR(inode->i_mode) && (flag & O_ACCMODE)) ||
             !permission(inode,ACC_MODE(flag))) {
-                iput(inode);
-                return -EPERM;
+                iput(inode); // 释放找到的i节点
+                return -EPERM; // 返回 -EPERM
         }
-        inode->i_atime = CURRENT_TIME;
-        if (flag & O_TRUNC)
-                truncate(inode);
-        *res_inode = inode;
-        return 0;
+        inode->i_atime = CURRENT_TIME; // 设置i节点的访问时间为当前时间
+        if (flag & O_TRUNC) // O_TRUNC 标志被置位
+                truncate(inode); // 截断i节点对应的数据区
+        *res_inode = inode; // 设置*res_inode，作为结果返回
+        return 0; // 返回 0，作为成功标志
 }
 
 int sys_mknod(const char * filename, int mode, int dev)
