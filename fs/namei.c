@@ -566,7 +566,7 @@ int open_namei(const char * pathname, int flag, int mode,
                 inode->i_dirt = 1; // 置位“申请的i节点”的”修改标志“
                 bh = add_entry(dir,basename,namelen,&de); // dir目录中增加文件的目录项
                 if (!bh) { // 增加目录项失败
-                        inode->i_nlinks--; // 新i节点的引用计数减1
+                        inode->i_nlinks--; // 新i节点的硬链接计数减1
                         iput(inode); // 释放新申请的i节点
                         iput(dir); // 释放最末端目录的i节点
                         return -ENOSPC; // 返回错误号 ENOSPC
@@ -601,6 +601,19 @@ int open_namei(const char * pathname, int flag, int mode,
         return 0; // 返回 0，作为成功标志
 }
 
+/**
+ * 创建一个文件i节点
+ *
+ * filename: 路径名
+ * mode: 使用许可和节点类型
+ * dev: 设备号
+ *
+ * 成功：返回 0 ，失败：返回错误号
+ *
+ * 一般用于创建设备特殊和管道文件的i节点
+ * 注意：结果并不返回新创建的i节点！！！
+ * 
+ */
 int sys_mknod(const char * filename, int mode, int dev)
 {
         const char * basename;
@@ -609,49 +622,60 @@ int sys_mknod(const char * filename, int mode, int dev)
         struct buffer_head * bh;
         struct dir_entry * de;
 	
-        if (!suser())
-                return -EPERM;
-        if (!(dir = dir_namei(filename,&namelen,&basename)))
-                return -ENOENT;
-        if (!namelen) {
-                iput(dir);
-                return -ENOENT;
+        if (!suser()) // 非超级用户无法创建设备或管道文件的节点
+                return -EPERM; // 返回 EPERM 
+        if (!(dir = dir_namei(filename,&namelen,&basename))) // 无法读取路径名的末端目录对应的i节点指针 
+                return -ENOENT; // 返回 ENOENT
+        if (!namelen) { // namelen == 0 说明给出的路径名最后部分不是文件名
+                iput(dir); // 释放末端目录对应的i节点
+                return -ENOENT; // 返回 ENOENT
         }
-        if (!permission(dir,MAY_WRITE)) {
-                iput(dir);
-                return -EPERM;
+        if (!permission(dir,MAY_WRITE)) { // 末端目录没有写权限
+                iput(dir); // 释放末端目录对应的i节点
+                return -EPERM; // 返回 EPERM 
         }
-        bh = find_entry(&dir,basename,namelen,&de);
-        if (bh) {
-                brelse(bh);
-                iput(dir);
-                return -EEXIST;
+        bh = find_entry(&dir,basename,namelen,&de); // 在末端目录中查找"basename"对应的目录项
+        if (bh) { // 查找到对应的目录项
+                brelse(bh); // 释放保存该目录项的高速缓冲块
+                iput(dir); // 释放末端目录对应的i节点
+                return -EEXIST; // 返回 EEXIST
         }
-        inode = new_inode(dir->i_dev);
-        if (!inode) {
-                iput(dir);
-                return -ENOSPC;
+        inode = new_inode(dir->i_dev); // 在设备上创建新的i节点
+        if (!inode) { // 无法创建新的i节点
+                iput(dir); // 释放末端目录对应的i节点
+                return -ENOSPC; // 返回 ENOSPC
         }
-        inode->i_mode = mode;
-        if (S_ISBLK(mode) || S_ISCHR(mode))
-                inode->i_zone[0] = dev;
-        inode->i_mtime = inode->i_atime = CURRENT_TIME;
-        inode->i_dirt = 1;
-        bh = add_entry(dir,basename,namelen,&de);
-        if (!bh) {
-                iput(dir);
-                inode->i_nlinks=0;
-                iput(inode);
-                return -ENOSPC;
+        inode->i_mode = mode; // 设置i节点的”文件类型和属性“
+        if (S_ISBLK(mode) || S_ISCHR(mode)) // 如果文件是“块设备”或”字符设备”
+                inode->i_zone[0] = dev; // i_zone[0] 设置为对应的设备号
+        inode->i_mtime = inode->i_atime = CURRENT_TIME; // i节点“创建时间”和“被访问时间”设置为“当前时间”
+        inode->i_dirt = 1; // 置位i节点的修改标志
+        bh = add_entry(dir,basename,namelen,&de); // 在末端目录中添加新创建的i节点作为目录项
+        if (!bh) { // 添加目录项失败
+                iput(dir); // 释放末端目录对应的i节点
+                inode->i_nlinks=0; // 新创建文件的i节点的硬链接计数设置为0（等价于删除某个文件）
+                iput(inode); // 释放刚创建的文件i节点
+                return -ENOSPC; // 返回 ENOSPC
         }
-        de->inode = inode->i_num;
-        bh->b_dirt = 1;
-        iput(dir);
-        iput(inode);
-        brelse(bh);
-        return 0;
+        de->inode = inode->i_num; // 设置刚刚添加的目录项的i节点号
+        bh->b_dirt = 1; // 置位目录项的修改标志
+        iput(dir); // 释放末端目录对应的i节点
+        iput(inode); // 释放刚创建的文件i节点
+        brelse(bh); // 释放包含刚创建目录项的高速缓冲块
+        return 0; // 成功创建文件的i节点，返回0
 }
 
+/**
+ * 创建一个目录
+ *
+ * pathname: 路径名
+ * mode: 目录使用的权限属性
+ *
+ * 成功：返回 0，失败：返回错误号
+ *
+ * 同样这里也并不返回新创建目录对应的i节点号！！！
+ * 
+ */
 int sys_mkdir(const char * pathname, int mode)
 {
         const char * basename;
@@ -660,73 +684,76 @@ int sys_mkdir(const char * pathname, int mode)
         struct buffer_head * bh, *dir_block;
         struct dir_entry * de;
 
-        if (!suser())
-                return -EPERM;
-        if (!(dir = dir_namei(pathname,&namelen,&basename)))
-                return -ENOENT;
-        if (!namelen) {
-                iput(dir);
-                return -ENOENT;
+        if (!(dir = dir_namei(pathname,&namelen,&basename))) // 无法读取路径名的末端目录对应的i节点指针 
+                return -ENOENT; // 返回 ENOENT
+        if (!namelen) { // namelen == 0 说明给出的路径名最后部分不是目录文件名
+                iput(dir); // 释放末端目录对应的i节点 
+                return -ENOENT; // 返回 ENOENT
         }
-        if (!permission(dir,MAY_WRITE)) {
-                iput(dir);
-                return -EPERM;
+        if (!permission(dir,MAY_WRITE)) { // 末端目录没有写权限 
+                iput(dir); // 释放末端目录对应的i节点 
+                return -EPERM; // 返回 EPERM
         }
-        bh = find_entry(&dir,basename,namelen,&de);
-        if (bh) {
-                brelse(bh);
-                iput(dir);
-                return -EEXIST;
+        bh = find_entry(&dir,basename,namelen,&de); // 在末端目录中查找"basename"对应的目录项 
+        if (bh) { // 查找到对应的目录项 
+                brelse(bh); // 释放保存该目录项的高速缓冲块
+                iput(dir); // 释放末端目录对应的i节点 
+                return -EEXIST; // 返回 EEXIST 
         }
-        inode = new_inode(dir->i_dev);
-        if (!inode) {
-                iput(dir);
-                return -ENOSPC;
+        inode = new_inode(dir->i_dev); // 在设备上创建新的目录i节点
+        if (!inode) { // 无法创建新的目录i节点 
+                iput(dir); // 释放末端目录对应的i节点 
+                return -ENOSPC; // 返回 ENOSPC 
         }
-        inode->i_size = 32;
-        inode->i_dirt = 1;
-        inode->i_mtime = inode->i_atime = CURRENT_TIME;
-        if (!(inode->i_zone[0]=new_block(inode->i_dev))) {
-                iput(dir);
-                inode->i_nlinks--;
-                iput(inode);
-                return -ENOSPC;
+        inode->i_size = 32; // 设置目录i节点对应的数据区大小为32字节（2个目录项的大小 '.', '..'）
+        inode->i_dirt = 1; // 置位目录i节点的修改标志
+        inode->i_mtime = inode->i_atime = CURRENT_TIME; // 目录i节点“创建时间”和“被访问时间”设置为“当前时间”
+        // 在设备上为目录数据申请一块新的逻辑块，申请的逻辑快号被赋值给inode->i_zone[0]
+        if (!(inode->i_zone[0]=new_block(inode->i_dev))) { // 申请新的逻辑块失败
+                iput(dir); // 释放末端目录对应的i节点 
+                inode->i_nlinks--; // 递减目录i节点的硬链接计数
+                iput(inode); // 释放申请的目录i节点
+                return -ENOSPC; // 返回 ENOSPC
         }
-        inode->i_dirt = 1;
-        if (!(dir_block=bread(inode->i_dev,inode->i_zone[0]))) {
-                iput(dir);
-                free_block(inode->i_dev,inode->i_zone[0]);
-                inode->i_nlinks--;
-                iput(inode);
-                return -ERROR;
+        inode->i_dirt = 1; // 置位目录i节点的修改标志
+        // 从设备读入刚申请的目录数据区对应的逻辑块到高速缓冲区
+        if (!(dir_block=bread(inode->i_dev,inode->i_zone[0]))) { // 从设备读入刚申请的目录数据区对应的逻辑块失败
+                iput(dir); // 释放末端目录对应的i节点 
+                free_block(inode->i_dev,inode->i_zone[0]); // 释放刚申请的逻辑块
+                inode->i_nlinks--; // 递减目录i节点的硬链接计数 
+                iput(inode); // 释放申请的目录i节点
+                return -ERROR; // 返回 ERROR 
         }
-        de = (struct dir_entry *) dir_block->b_data;
-        de->inode=inode->i_num;
-        strcpy(de->name,".");
-        de++;
-        de->inode = dir->i_num;
-        strcpy(de->name,"..");
-        inode->i_nlinks = 2;
-        dir_block->b_dirt = 1;
-        brelse(dir_block);
-        inode->i_mode = I_DIRECTORY | (mode & 0777 & ~current->umask);
-        inode->i_dirt = 1;
-        bh = add_entry(dir,basename,namelen,&de);
-        if (!bh) {
-                iput(dir);
-                free_block(inode->i_dev,inode->i_zone[0]);
-                inode->i_nlinks=0;
-                iput(inode);
-                return -ENOSPC;
+        // 设置 '.' 目录项
+        de = (struct dir_entry *) dir_block->b_data; // de 指向刚申请的逻辑块的数据区
+        de->inode=inode->i_num; // 设置'.'目录项的inode域(de->inode)为刚申请的目录i节点的i节点号(inode->i_num)
+        strcpy(de->name,"."); // 设置'.'目录项的name域为'.'
+        de++; // de指向下一个
+        // 设置 '..' 目录项
+        de->inode = dir->i_num; // 设置'..'目录项的inode域(de->inode)为路径名末端目录对应i节点的i节点号(dir->i_num)
+        strcpy(de->name,".."); // 设置'..'目录项的name域为'..'
+        inode->i_nlinks = 2; // 创建的目录i节点的链接计数为2（'.' 和 '..'）
+        dir_block->b_dirt = 1; // 置位“新创建目录数据区”的“逻辑块“的”修改标志“
+        brelse(dir_block); // 释放”新创建目录数据区“的”逻辑块“所对应的高速缓冲块
+        inode->i_mode = I_DIRECTORY | (mode & 0777 & ~current->umask); // 设置新创建的i节点的文件属性和权限（目录，根据当前进程的权限屏蔽码和mode参数设置权限）
+        inode->i_dirt = 1; // 置位目录i节点的修改标志
+        bh = add_entry(dir,basename,namelen,&de); // 在末端目录中添加新创建的目录i节点作为目录项
+        if (!bh) { // 添加目录项失败
+                iput(dir); // 释放末端目录对应的i节点
+                free_block(inode->i_dev,inode->i_zone[0]); // 释放刚申请目录i节点对应的逻辑块
+                inode->i_nlinks=0; // 设置目录i节点的硬链接计数为0（删除这个目录文件）
+                iput(inode); // 释放申请的目录i节点
+                return -ENOSPC; // 返回 ENOSPC
         }
-        de->inode = inode->i_num;
-        bh->b_dirt = 1;
-        dir->i_nlinks++;
-        dir->i_dirt = 1;
-        iput(dir);
-        iput(inode);
-        brelse(bh);
-        return 0;
+        de->inode = inode->i_num; // 设置刚刚添加的目录项的i节点号 
+        bh->b_dirt = 1; // 置位目录项的修改标志
+        dir->i_nlinks++; // 递增”末端目录“的”硬链接计数“
+        // 注意：mknod并不会修改dir节点的域，所以上面没有置位dir->i_dirt，而增加目录，会修改dir的硬链接计数！！！
+        dir->i_dirt = 1; // 置位”末端目录“i节点的修改标志
+        iput(dir); // 释放末端目录对应的目录i节点
+        iput(inode); // 释放刚创建的目录i节点
+        brelse(bh); // 释放包含刚创建目录项的高速缓冲块
+        return 0; // 成功创建目录的i节点，返回0
 }
 
 /*
