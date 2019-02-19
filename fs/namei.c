@@ -759,6 +759,15 @@ int sys_mkdir(const char * pathname, int mode)
 /*
  * routine to check that the specified directory is empty (for rmdir)
  */
+
+/*
+ * 检查指定目录是否为空（用于rmdir系统调用）
+ *
+ * inode: 目录对应的i节点指针
+ *
+ * 空：返回 1，非空或出错：返回 0
+ * 
+ */
 static int empty_dir(struct m_inode * inode)
 {
         int nr,block;
@@ -766,43 +775,57 @@ static int empty_dir(struct m_inode * inode)
         struct buffer_head * bh;
         struct dir_entry * de;
 
-        len = inode->i_size / sizeof (struct dir_entry);
+        len = inode->i_size / sizeof (struct dir_entry); // 计算i节点数据区大小能包含多少个目录项结构
+        // “数据区大小 < 2个目录项结构" 或者 ”i节点的第一个直接块没有指向任何磁盘块号“ 或者 ”第一个直接块不可读“
         if (len<2 || !inode->i_zone[0] ||
             !(bh=bread(inode->i_dev,inode->i_zone[0]))) {
-                printk("warning - bad directory on dev %04x\n",inode->i_dev);
-                return 0;
+                printk("warning - bad directory on dev %04x\n",inode->i_dev); // 打印报警信息
+                return 0; // 返回 0: 表示出错
         }
-        de = (struct dir_entry *) bh->b_data;
+        de = (struct dir_entry *) bh->b_data; // de指向高速缓存区中的第一个直接块的数据区
+        // 校验第一个目录项：i节点号非空，文件名为 '.'
+        // 校验第二个目录项：i节点号非空，文件名为 '..'
         if (de[0].inode != inode->i_num || !de[1].inode || 
             strcmp(".",de[0].name) || strcmp("..",de[1].name)) {
-                printk("warning - bad directory on dev %04x\n",inode->i_dev);
-                return 0;
+                printk("warning - bad directory on dev %04x\n",inode->i_dev); // 打印报警信息
+                return 0; // 返回 0: 表示出错
         }
         nr = 2;
         de += 2;
+        // 遍历i节点对应的所有数据区，检查是否存在有i节点号非空的目录项
         while (nr<len) {
-                if ((void *) de >= (void *) (bh->b_data+BLOCK_SIZE)) {
-                        brelse(bh);
-                        block=bmap(inode,nr/DIR_ENTRIES_PER_BLOCK);
-                        if (!block) {
+                if ((void *) de >= (void *) (bh->b_data+BLOCK_SIZE)) { // 当前的缓冲块已经读完
+                        brelse(bh); // 释放当前的缓冲块
+                        block=bmap(inode,nr/DIR_ENTRIES_PER_BLOCK); // 获取下一个数据块在i节点上的逻辑块号 
+                        if (!block) { // 无法获取，直接跳过这个逻辑块
                                 nr += DIR_ENTRIES_PER_BLOCK;
                                 continue;
                         }
-                        if (!(bh=bread(inode->i_dev,block)))
-                                return 0;
-                        de = (struct dir_entry *) bh->b_data;
+                        // 把下一个目录数据区的逻辑块读入高速缓冲中
+                        if (!(bh=bread(inode->i_dev,block))) // 无法读取下一个逻辑块 
+                                return 0; // 返回 0：表示出错 
+                        de = (struct dir_entry *) bh->b_data; // de指向读出的下一个逻辑块的数据区开头
                 }
-                if (de->inode) {
-                        brelse(bh);
-                        return 0;
+                if (de->inode) { // 目录项的i节点号非空：说明存在一个合法的目录项
+                        brelse(bh); // 释放缓冲块
+                        return 0; // 返回 0：表示非空 
                 }
-                de++;
-                nr++;
+                de++; // 指向下一个目录项
+                nr++; // 目录项个数递增
         }
-        brelse(bh);
-        return 1;
+        brelse(bh); // 释放缓冲块
+        return 1; // 返回1：表示空目录
 }
 
+
+/**
+ * 删除目录
+ *
+ * name: 路径名
+ *
+ * 成功：返回 0，失败：返回错误号
+ * 
+ */
 int sys_rmdir(const char * name)
 {
         const char * basename;
@@ -811,72 +834,78 @@ int sys_rmdir(const char * name)
         struct buffer_head * bh;
         struct dir_entry * de;
 
-        if (!suser())
-                return -EPERM;
-        if (!(dir = dir_namei(name,&namelen,&basename)))
-                return -ENOENT;
-        if (!namelen) {
-                iput(dir);
-                return -ENOENT;
+        if (!(dir = dir_namei(name,&namelen,&basename))) // 无法读取路径名的末端目录对应的i节点指针 
+                return -ENOENT; // 返回 ENOENT 
+        if (!namelen) { // namelen == 0 说明给出的路径名最后部分不是目录文件名
+                iput(dir); // 释放末端目录对应的i节点
+                return -ENOENT; // 返回 ENOENT 
         }
-        if (!permission(dir,MAY_WRITE)) {
-                iput(dir);
-                return -EPERM;
+        if (!permission(dir,MAY_WRITE)) { // 末端目录没有写权限 
+                iput(dir); // 释放末端目录对应的i节
+                return -EPERM; // 返回 EPERM 
         }
-        bh = find_entry(&dir,basename,namelen,&de);
-        if (!bh) {
-                iput(dir);
-                return -ENOENT;
+        bh = find_entry(&dir,basename,namelen,&de); // 在末端目录中查找"basename"对应的目录项 
+        if (!bh) { // 没有查找到对应的目录项
+                iput(dir); // 释放末端目录对应的i节点 
+                return -ENOENT; // 返回 ENOENT 
         }
-        if (!(inode = iget(dir->i_dev, de->inode))) {
-                iput(dir);
-                brelse(bh);
-                return -EPERM;
+        // 读取要删除的目录项对应的i节点
+        if (!(inode = iget(dir->i_dev, de->inode))) { // 读取要删除的目录项对应的i节点失败
+                iput(dir); // 释放末端目录对应的i节点
+                brelse(bh); // 释放保存末端目录之目录项的缓冲块
+                return -EPERM; // 返回 EPERM
         }
+        // 校验是否要删除目录的权限
+        // “包含要删除目录项的目录设置了受限删除标志” 并且 “当前进程的有效用户ID不是root” 并且 "当前目录节点的宿主ID 不等于 当前进程的有效用户ID"
         if ((dir->i_mode & S_ISVTX) && current->euid &&
             inode->i_uid != current->euid) {
-                iput(dir);
-                iput(inode);
-                brelse(bh);
-                return -EPERM;
+                iput(dir); // 释放末端目录对应的i节点
+                iput(inode); // 释放要删除目录的i节点
+                brelse(bh); // 释放保存末端目录之目录项的缓冲块 
+                return -EPERM; // 返回 EPERM
         }
+        // “要删除的目录项的设备号 不等于 包含该目录项的目录的设备号” 或者 “要删除目录项的i节点引用计数 > 1” ：无法删除该目录项
         if (inode->i_dev != dir->i_dev || inode->i_count>1) {
-                iput(dir);
-                iput(inode);
-                brelse(bh);
-                return -EPERM;
+                iput(dir); // 释放末端目录对应的i节点
+                iput(inode); // 释放要删除目录的i节点
+                brelse(bh); // 释放保存末端目录之目录项的缓冲块
+                return -EPERM; // 返回 EPERM
         }
+        // 如果要删除的目录的i节点地址 == 包含该目录项的目录的i节点地址
+        // 这意味着要删除的目录项是 '.'，这也是不允许的！！！ 
         if (inode == dir) {	/* we may not delete ".", but "../dir" is ok */
-                iput(inode);
-                iput(dir);
-                brelse(bh);
-                return -EPERM;
+                iput(inode); // 释放要删除目录的i节点
+                iput(dir); // 释放末端目录对应的i节点
+                brelse(bh); // 释放保存末端目录之目录项的缓冲块
+                return -EPERM; // 返回 EPERM
         }
+        // 如果要删除的目录项的文件属性不是目录
         if (!S_ISDIR(inode->i_mode)) {
-                iput(inode);
-                iput(dir);
-                brelse(bh);
-                return -ENOTDIR;
+                iput(inode); // 释放要删除目录的i节点
+                iput(dir); // 释放末端目录对应的i节点
+                brelse(bh); // 释放保存末端目录之目录项的缓冲块
+                return -ENOTDIR; // 返回 ENOTDIR 
         }
+        // 如果要删除的目录非空
         if (!empty_dir(inode)) {
-                iput(inode);
-                iput(dir);
-                brelse(bh);
-                return -ENOTEMPTY;
+                iput(inode); // 释放要删除目录的i节点
+                iput(dir); // 释放末端目录对应的i节点
+                brelse(bh); // 释放保存末端目录之目录项的缓冲块
+                return -ENOTEMPTY; // 返回 ENOTEMPTY 
         }
-        if (inode->i_nlinks != 2)
-                printk("empty directory has nlink!=2 (%d)",inode->i_nlinks);
-        de->inode = 0;
-        bh->b_dirt = 1;
-        brelse(bh);
-        inode->i_nlinks=0;
-        inode->i_dirt=1;
-        dir->i_nlinks--;
-        dir->i_ctime = dir->i_mtime = CURRENT_TIME;
-        dir->i_dirt=1;
-        iput(dir);
-        iput(inode);
-        return 0;
+        if (inode->i_nlinks != 2) // 如果要删除的目录的引用计数 不等于 2 
+                printk("empty directory has nlink!=2 (%d)",inode->i_nlinks); // 显示报警信息，但删除操作仍然进行？？？
+        de->inode = 0; // 要删除的目录项i节点号置0
+        bh->b_dirt = 1; // 置位包含该目录项数据区对应的高速缓冲块的修改标志
+        brelse(bh); // 释放高速缓冲块
+        inode->i_nlinks=0; // 删除目录项对应i节点的引用计数置0
+        inode->i_dirt=1; // 置位删除目录项的对应i节点的修改标志
+        dir->i_nlinks--; // 包含该删除目录的目录对应i节点的引用计数 - 1 
+        dir->i_ctime = dir->i_mtime = CURRENT_TIME; // 设置”该删除目录的目录对应i节点“的创建时间和修改时间为”当前时间“
+        dir->i_dirt=1; // 置位”该删除目录的目录对应i节点“的修改标志
+        iput(dir); // 释放末端目录对应的i节点
+        iput(inode); // 释放要删除目录的i节点
+        return 0; // 返回 0： 表示删除成功
 }
 
 int sys_unlink(const char * name)
