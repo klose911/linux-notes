@@ -836,7 +836,7 @@ int sys_rmdir(const char * name)
 
         if (!(dir = dir_namei(name,&namelen,&basename))) // 无法读取路径名的末端目录对应的i节点指针 
                 return -ENOENT; // 返回 ENOENT 
-        if (!namelen) { // namelen == 0 说明给出的路径名最后部分不是目录文件名
+        if (!namelen) { // namelen == 0 说明给出的路径名最后以'/'结尾
                 iput(dir); // 释放末端目录对应的i节点
                 return -ENOENT; // 返回 ENOENT 
         }
@@ -908,6 +908,16 @@ int sys_rmdir(const char * name)
         return 0; // 返回 0： 表示删除成功
 }
 
+/**
+ * 删除（释放）文件名对应的目录项（普通文件）
+ *
+ * name: 路径名
+ *
+ * 成功：返回 0，失败：返回错误号
+ *
+ * 如果删除的目录项，是这个普通文件的最后一个硬链接，并且没有进程正打开该文件，则该文件也将被删除，并释放所占用的设备空间
+ * 
+ */
 int sys_unlink(const char * name)
 {
         const char * basename;
@@ -916,56 +926,74 @@ int sys_unlink(const char * name)
         struct buffer_head * bh;
         struct dir_entry * de;
 
-        if (!(dir = dir_namei(name,&namelen,&basename)))
-                return -ENOENT;
-        if (!namelen) {
-                iput(dir);
-                return -ENOENT;
+        if (!(dir = dir_namei(name,&namelen,&basename))) // 无法读取路径名的末端目录对应的i节点指针
+                return -ENOENT; // 返回 ENOENT
+        if (!namelen) { // namelen == 0 说明给出的路径名最后以'/'结尾
+                iput(dir); // 释放末端目录对应的i节点
+                return -ENOENT; // 返回 ENOENT
         }
-        if (!permission(dir,MAY_WRITE)) {
-                iput(dir);
-                return -EPERM;
+        if (!permission(dir,MAY_WRITE)) { // 末端目录没有写权限
+                iput(dir); // 释放末端目录对应的i节点
+                return -EPERM; // 返回 EPERM
         }
-        bh = find_entry(&dir,basename,namelen,&de);
-        if (!bh) {
-                iput(dir);
-                return -ENOENT;
+        bh = find_entry(&dir,basename,namelen,&de); // 在末端目录中查找"basename"对应的目录项
+        if (!bh) { // 没有查找到对应的目录项
+                iput(dir); // 释放末端目录对应的i节点
+                return -ENOENT; // 返回 ENOENT
         }
-        if (!(inode = iget(dir->i_dev, de->inode))) {
-                iput(dir);
-                brelse(bh);
-                return -ENOENT;
+        // 读取要删除文件的目录项对应的i节点
+        if (!(inode = iget(dir->i_dev, de->inode))) { // 读取要删除文件的目录项对应的i节点失败
+                iput(dir); // 释放末端目录对应的i节点
+                brelse(bh); // 释放高速缓冲块
+                return -ENOENT; // 返回 ENOENT
         }
+        // 校验是否要删除文件的权限
+        // “包含要删除文件的目录设置了受限删除标志” 并且
+        // “当前进程的有效用户ID不是root” 并且
+        // "当前文件节点的宿主ID 不等于 当前进程的有效用户ID" 并且
+        // “包含要删除文件的目录宿主ID 不等于 当前进程的有效用户ID“ 
         if ((dir->i_mode & S_ISVTX) && !suser() &&
             current->euid != inode->i_uid &&
             current->euid != dir->i_uid) {
-                iput(dir);
-                iput(inode);
-                brelse(bh);
-                return -EPERM;
+                iput(dir); // 释放末端目录对应的i节点
+                iput(inode); // 释放要删除文件的i节点
+                brelse(bh); // 释放高速缓冲块
+                return -EPERM; // 返回 EPERM
         }
+        // 如果要删除的目录项是目录，也无法删除
         if (S_ISDIR(inode->i_mode)) {
-                iput(inode);
-                iput(dir);
-                brelse(bh);
-                return -EPERM;
+                iput(inode); // 释放要删除文件的i节点
+                iput(dir); // 释放末端目录对应的i节点
+                brelse(bh); // 释放高速缓冲块
+                return -EPERM; // 返回 EPERM
         }
-        if (!inode->i_nlinks) {
+        if (!inode->i_nlinks) { // 如果要删除文件的硬链接数 == 0
                 printk("Deleting nonexistent file (%04x:%d), %d\n",
-                       inode->i_dev,inode->i_num,inode->i_nlinks);
-                inode->i_nlinks=1;
+                       inode->i_dev,inode->i_num,inode->i_nlinks); // 打印错误信息
+                inode->i_nlinks=1; // 仍然执行删除操作，手动设置硬链接数为1
         }
-        de->inode = 0;
-        bh->b_dirt = 1;
-        brelse(bh);
-        inode->i_nlinks--;
-        inode->i_dirt = 1;
-        inode->i_ctime = CURRENT_TIME;
-        iput(inode);
-        iput(dir);
-        return 0;
+        de->inode = 0; // 要删除的目录项i节点号置0
+        bh->b_dirt = 1; // 置位包含该目录项数据区对应的高速缓冲块的修改标志
+        brelse(bh); // 释放高速缓冲块
+        inode->i_nlinks--; // 递减删除文件i节点的硬链接计数
+        inode->i_dirt = 1; // 置位删除文件i节点的修改标志
+        inode->i_ctime = CURRENT_TIME; // 删除文件i节点的创建时间设置为当前时间
+        iput(inode); // 释放要删除文件的i节点
+        iput(dir); // 释放末端目录对应的i节点
+        return 0; // 返回 0： 表示删除成功
 }
 
+/**
+ * 为文件(oldname)建立一个目录项(newname)
+ *
+ * oldname: 原路径名
+ * newname: 新路径名
+ *
+ * 成功：返回 0，失败：返回错误号
+ *
+ * 为一个已经存在的文件创建一个新的硬链接
+ * 
+ */
 int sys_link(const char * oldname, const char * newname)
 {
         struct dir_entry * de;
@@ -974,53 +1002,54 @@ int sys_link(const char * oldname, const char * newname)
         const char * basename;
         int namelen;
 
-        oldinode=namei(oldname);
-        if (!oldinode)
-                return -ENOENT;
-        if (S_ISDIR(oldinode->i_mode)) {
-                iput(oldinode);
-                return -EPERM;
+        oldinode=namei(oldname); // 获得旧路径名对应的i节点
+        if (!oldinode) // 无法获得旧路径名对应的i节点
+                return -ENOENT; // 返回 ENOENT 
+        if (S_ISDIR(oldinode->i_mode)) { // 如果旧路径名对应的是目录
+                iput(oldinode); // 释放旧路径名对应的i节点
+                return -EPERM; // 返回 EPERM
         }
-        dir = dir_namei(newname,&namelen,&basename);
-        if (!dir) {
-                iput(oldinode);
-                return -EACCES;
+        dir = dir_namei(newname,&namelen,&basename); // 获得新路径名对应的末端目录的i节点
+        if (!dir) { // 无法获得新路径名对应的末端目录的i节点
+                iput(oldinode); // 释放旧路径名对应的i节点
+                return -EACCES; // 返回 EACCES
         }
-        if (!namelen) {
-                iput(oldinode);
-                iput(dir);
-                return -EPERM;
+        if (!namelen) { // namelen == 0 说明新路径名最后以'/'结尾
+                iput(oldinode); // 释放旧路径名对应的i节点
+                iput(dir); // 释放新路径名中末端目录对应的i节点
+                return -EPERM; // 返回 EPERM
         }
-        if (dir->i_dev != oldinode->i_dev) {
-                iput(dir);
-                iput(oldinode);
-                return -EXDEV;
+        // 硬链接只能在同一个块设备上进行！！！
+        if (dir->i_dev != oldinode->i_dev) { // ”保存新路径名的目录的设备号“不等于“旧路径名i节点中的设备号”
+                iput(dir); // 释放新路径名中末端目录对应的i节点
+                iput(oldinode); // 释放旧路径名对应的i节点
+                return -EXDEV; // 返回 EXDEV
         }
-        if (!permission(dir,MAY_WRITE)) {
-                iput(dir);
-                iput(oldinode);
-                return -EACCES;
+        if (!permission(dir,MAY_WRITE)) { // 保存新链接的目录没有写权限
+                iput(dir); // 释放新路径名中末端目录对应的i节点
+                iput(oldinode); // 释放旧路径名对应的i节点
+                return -EACCES; // 返回 EACCES
         }
-        bh = find_entry(&dir,basename,namelen,&de);
-        if (bh) {
-                brelse(bh);
-                iput(dir);
-                iput(oldinode);
-                return -EEXIST;
+        bh = find_entry(&dir,basename,namelen,&de); // 在新路径名的末端目录中查找"basename"对应的目录项
+        if (bh) { // 查找到对应的目录项
+                brelse(bh); // 释放高速缓冲块
+                iput(dir); // 释放新路径名中末端目录对应的i节点
+                iput(oldinode); // 释放旧路径名对应的i节点
+                return -EEXIST; // 返回 EEXIST
         }
-        bh = add_entry(dir,basename,namelen,&de);
-        if (!bh) {
-                iput(dir);
-                iput(oldinode);
-                return -ENOSPC;
+        bh = add_entry(dir,basename,namelen,&de); // 在新路径名的末端目录中添加新创建的链接文件i节点作为目录项
+        if (!bh) { // 添加链接文件目录项失败
+                iput(dir); // 释放新路径名中末端目录对应的i节点
+                iput(oldinode); // 释放旧路径名对应的i节点
+                return -ENOSPC; // 返回 ENOSPC
         }
-        de->inode = oldinode->i_num;
-        bh->b_dirt = 1;
-        brelse(bh);
-        iput(dir);
-        oldinode->i_nlinks++;
-        oldinode->i_ctime = CURRENT_TIME;
-        oldinode->i_dirt = 1;
-        iput(oldinode);
-        return 0;
+        de->inode = oldinode->i_num; // “新链接文件i节点”的“i节点号”设置为“老路径名对应的i节点“的”i节点号”
+        bh->b_dirt = 1; // 置位包含新链接文件目录项所对应的高速缓冲块的修改标志
+        brelse(bh); // 释放高速缓冲块
+        iput(dir); // 释放新路径名中末端目录对应的i节点
+        oldinode->i_nlinks++; // 旧路径名对应的i节点的硬链接计数 + 1 
+        oldinode->i_ctime = CURRENT_TIME; // 旧路径名对应的i节点的创建时间设置为当前时间
+        oldinode->i_dirt = 1; // 置位旧路径名对应的i节点的修改标志
+        iput(oldinode); // 释放旧路径名对应的i节点
+        return 0; // 返回 0： 表示创建硬链接成功
 }
