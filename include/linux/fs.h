@@ -73,12 +73,13 @@ void buffer_init(long buffer_end);
 
 #define INODES_PER_BLOCK ((BLOCK_SIZE)/(sizeof (struct d_inode))) // 每个逻辑块可存储的 i节点 个数 (1024 / 32 = 32 个)
 #define DIR_ENTRIES_PER_BLOCK ((BLOCK_SIZE)/(sizeof (struct dir_entry))) // 每个逻辑块能保存的目录项数 (1024 / 16 = 64个)
-
-#define PIPE_HEAD(inode) ((inode).i_zone[0])
-#define PIPE_TAIL(inode) ((inode).i_zone[1])
-#define PIPE_SIZE(inode) ((PIPE_HEAD(inode)-PIPE_TAIL(inode))&(PAGE_SIZE-1))
-#define PIPE_EMPTY(inode) (PIPE_HEAD(inode)==PIPE_TAIL(inode))
-#define PIPE_FULL(inode) (PIPE_SIZE(inode)==(PAGE_SIZE-1))
+        
+#define PIPE_HEAD(inode) ((inode).i_zone[0]) // 管道头指针，保存在管道i节点的i_zone[0]域
+#define PIPE_TAIL(inode) ((inode).i_zone[1]) // 管道尾指针，保存在管道i节点的i_zone[1]域
+#define PIPE_SIZE(inode) ((PIPE_HEAD(inode)-PIPE_TAIL(inode))&(PAGE_SIZE-1)) // 计算管道大小
+#define PIPE_EMPTY(inode) (PIPE_HEAD(inode)==PIPE_TAIL(inode)) // 判断管道是否为空空
+#define PIPE_FULL(inode) (PIPE_SIZE(inode)==(PAGE_SIZE-1)) // 判断管道是否已满
+// 管道头指针递增
 #define INC_PIPE(head)                                  \
         __asm__("incl %0\n\tandl $4095,%0"::"m" (head))
 
