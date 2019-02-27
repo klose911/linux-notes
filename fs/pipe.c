@@ -10,62 +10,97 @@
 #include <linux/mm.h>	/* for get_free_page */
 #include <asm/segment.h>
 
+/**
+ * 管道读操作函数
+ *
+ * inode: 管道对应的i节点
+ * buf: 用户空间数据缓冲区指针
+ * count: 要读取的字节数
+ *
+ * 返回：读取的总字节数，0表示失败
+ * 
+ */
 int read_pipe(struct m_inode * inode, char * buf, int count)
 {
         int chars, size, read = 0;
 
+        // 如果要读取的字节数 > 0, 执行下列循环
         while (count>0) {
-                while (!(size=PIPE_SIZE(*inode))) {
-                        wake_up(&inode->i_wait);
+                // 计算管道可用数据的大小
+                while (!(size=PIPE_SIZE(*inode))) { // 管道中可用数据的大小 == 0 ： 管道为空
+                        wake_up(&inode->i_wait); // 唤醒“写管道”的进程(inode->i_wait)
+                        // 如果已经没有写管道的进程：i节点的引用计数 != 2 
                         if (inode->i_count != 2) /* are there any writers? */
-                                return read;
-                        sleep_on(&inode->i_wait);
+                                return read; // 返回读取到的字节数
+                        // 这里没有考虑到信号，后面版本对此进行了修改！！！
+                        sleep_on(&inode->i_wait); // 让当前进程在管道的i节点的等待队列休眠（不可中断），等待管道被写入字节
                 }
-                chars = PAGE_SIZE-PIPE_TAIL(*inode);
-                if (chars > count)
-                        chars = count;
-                if (chars > size)
-                        chars = size;
-                count -= chars;
-                read += chars;
-                size = PIPE_TAIL(*inode);
-                PIPE_TAIL(*inode) += chars;
+                // 运行到这里，说明管道中有字节可读
+                chars = PAGE_SIZE-PIPE_TAIL(*inode); // 计算“管道尾指针”到“缓冲区末端”的字节数
+                if (chars > count) // 如果 chars > 要读的字节数
+                        chars = count; // chars = 要读的字节数
+                if (chars > size) // 如果 chars > 管道当前可读的字节数 
+                        chars = size; // chars = 管道当前可读的字节数
+                count -= chars; // 要读的总字节数 - 本次循环管道可读的字节数
+                read += chars; // 读到的总字节数 + 本次循环管道可读的字节数
+                size = PIPE_TAIL(*inode); // 令size指向当前管道尾指针处（也就是将要开始读取的地方）
+                // 调整i节点的管道尾指针（读取管道用）：i_zone[1] 加上 chars个字节，然后取余
+                PIPE_TAIL(*inode) += chars; 
                 PIPE_TAIL(*inode) &= (PAGE_SIZE-1);
+                // 从管道的 inode->i_size[size]处开始 一个字节一个字节地 复制到“用户缓冲区”，总共拷贝chars个字节
                 while (chars-->0)
-                        put_fs_byte(((char *)inode->i_size)[size++],buf++);
+                        put_fs_byte(((char *)inode->i_size)[size++],buf++); // size, buf 自增
         }
+        // 当此次读操作完成后，唤醒写管道的进程
         wake_up(&inode->i_wait);
-        return read;
+        return read; // 返回当前已经读取的总字节数
 }
-	
+
+/**
+ * 管道写操作函数
+ *
+ * inode: 管道对应的i节点
+ * buf: 用户空间数据缓冲区指针
+ * count: 要写入的字节数
+ *
+ * 返回：写入的总字节数，-1 表示失败
+ * 
+ */
 int write_pipe(struct m_inode * inode, char * buf, int count)
 {
         int chars, size, written = 0;
 
+// 如果要写入的字节数 > 0, 执行下列循环
         while (count>0) {
-                while (!(size=(PAGE_SIZE-1)-PIPE_SIZE(*inode))) {
-                        wake_up(&inode->i_wait);
+                // 计算管道空闲空间
+                while (!(size=(PAGE_SIZE-1)-PIPE_SIZE(*inode))) { // 空闲空间 == 0 : 管道已满
+                        wake_up(&inode->i_wait); // 唤醒读取管道的进程
+                        // 如果管道i节点的引用计数 != 2 : 没有读取进程
                         if (inode->i_count != 2) { /* no readers */
-                                current->signal |= (1<<(SIGPIPE-1));
-                                return written?written:-1;
+                                current->signal |= (1<<(SIGPIPE-1)); // 向当前进程发送 SIGPIPE 信号
+                                return written?written:-1; // 返回已经写入的字节数，如果没有写入任何字节，返回 -1 表示失败
                         }
-                        sleep_on(&inode->i_wait);
+                        sleep_on(&inode->i_wait); // 当前进程进入休眠（不可中断），等待“读取管道的进程”从管道读取数据
                 }
-                chars = PAGE_SIZE-PIPE_HEAD(*inode);
-                if (chars > count)
-                        chars = count;
-                if (chars > size)
-                        chars = size;
-                count -= chars;
-                written += chars;
-                size = PIPE_HEAD(*inode);
+                // 运行到这里，说明管道中有字节可写
+                chars = PAGE_SIZE-PIPE_HEAD(*inode); // 计算管道头指针到管道末端的字节数
+                if (chars > count) // 如果 chars > 要写的字节数
+                        chars = count; //  chars = 要写的字节数
+                if (chars > size) // 如果 chars > 管道当前可写的字节数
+                        chars = size; // chars = 管道当前可写的字节数
+                count -= chars; // 要写的总字节数 - 本次循环管道可写的字节数
+                written += chars; // 写入的总字节数 + 本次循环管道可写的字节数
+                size = PIPE_HEAD(*inode); // 令size指向当前管道头指针处（也就是将要开始写入的地方）
+                // 调整i节点的管道头指针（写入管道用）：i_zone[0] 加上 chars个字节，然后取余
                 PIPE_HEAD(*inode) += chars;
                 PIPE_HEAD(*inode) &= (PAGE_SIZE-1);
+                // 从“用户缓冲区”一个字节一个字节地复制到管道的 inode->i_size[size]处，总共复制 chars 个字节
                 while (chars-->0)
-                        ((char *)inode->i_size)[size++]=get_fs_byte(buf++);
+                        ((char *)inode->i_size)[size++]=get_fs_byte(buf++); // size, buf 自增
         }
+        // 当此次写操作完成后，唤醒读管道的进程
         wake_up(&inode->i_wait);
-        return written;
+        return written; // 返回当前已经写入的总字节数
 }
 
 /**
