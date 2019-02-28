@@ -130,14 +130,14 @@ struct m_inode {
         unsigned short i_mode;
         unsigned short i_uid;
         unsigned long i_size;
-        unsigned long i_mtime;
+        unsigned long i_mtime; // 文件数据被修改的时间
         unsigned char i_gid;
         unsigned char i_nlinks;
         unsigned short i_zone[9];
 /* these are in memory also */
         struct task_struct * i_wait; // 等待该i节点的进程
-        unsigned long i_atime; // i节点自身被访问时间
-        unsigned long i_ctime; // i节点自身创建时间
+        unsigned long i_atime; // 文件数据被访问的时间
+        unsigned long i_ctime; // i节点自身被修改时间
         unsigned short i_dev; // i节点所在的设备号
         unsigned short i_num; // i节点号
         unsigned short i_count; // i节点被使用的次数（0表示该i节点处于空闲）
