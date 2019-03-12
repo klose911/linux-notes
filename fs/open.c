@@ -226,75 +226,112 @@ int sys_chown(const char * filename,int uid,int gid)
         return 0; // 返回 0
 }
 
+/**
+ * 打开（或创建）文件
+ *
+ * filename: 目录路径名
+ * flag: 打开文件标志，可取值 O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_EXCL, O_APPEND等
+ * mode: 如果本调用创建了一个新文件，则mode用于指定文件的属性，这些属性有 S_IRWXU, S_IRUSR, S_IRWXG 等
+ *
+ * 成功：返回文件描述符，失败：返回错误码
+ *
+ * 注意：mode属性只用于将来对文件的访问，即使创建了只读文件，返回的依旧是一个可读写的文件描述符！！！
+ * 
+ */
 int sys_open(const char * filename,int flag,int mode)
 {
         struct m_inode * inode;
         struct file * f;
         int i,fd;
 
-        mode &= 0777 & ~current->umask;
+        mode &= 0777 & ~current->umask; // 清除mode的高位，并且应用“当前进程“的”模式屏蔽码”
+        // 遍历进程的文件表，寻找最小的为空的项
         for(fd=0 ; fd<NR_OPEN ; fd++)
-                if (!current->filp[fd])
-                        break;
-        if (fd>=NR_OPEN)
-                return -EINVAL;
-        current->close_on_exec &= ~(1<<fd);
-        f=0+file_table;
+                if (!current->filp[fd]) // 相应项 == NULL : 空闲的文件项
+                        break; // 找到，退出遍历
+        if (fd>=NR_OPEN) // 完全遍历进程的文件表：没有找到空的文件项
+                return -EINVAL; // 返回 -EINVAL 
+        current->close_on_exec &= ~(1<<fd); // 复位“执行时关闭文件句柄位图”(close_on_exec)中这个文件描述符对应的位：设置为 0
+
+        f=0+file_table; // f指向系统文件表开始
+        // 遍历系统文件表，直到找到一项空项
         for (i=0 ; i<NR_FILE ; i++,f++)
-                if (!f->f_count) break;
-        if (i>=NR_FILE)
-                return -EINVAL;
-        (current->filp[fd]=f)->f_count++;
-        if ((i=open_namei(filename,flag,mode,&inode))<0) {
-                current->filp[fd]=NULL;
-                f->f_count=0;
-                return i;
+                if (!f->f_count) // f_count域 == 0 : 空闲的文件项
+                        break;
+        if (i>=NR_FILE) // 完全遍历系统文件表：没有找到空的文件项
+                return -EINVAL; // 返回 -EINVAL
+        // 进程文件表的对应项设置为文件系统表对应项
+        (current->filp[fd]=f)->f_count++; // 对应的文件项引用计数 + 1
+        // 调用文件打开open_namei函数：成功后，对应的i节点放入inode变量
+        if ((i=open_namei(filename,flag,mode,&inode))<0) { // 调用 open_namei 失败
+                current->filp[fd]=NULL; // 清空进程文件表项
+                f->f_count=0; // 设置系统文件表项引用计数为0 
+                return i; // 返回错误号
         }
 /* ttys are somewhat special (ttyxx major==4, tty major==5) */
+        // 处理字符设备文件
         if (S_ISCHR(inode->i_mode)) {
-                if (MAJOR(inode->i_zone[0])==4) {
-                        if (current->leader && current->tty<0) {
-                                current->tty = MINOR(inode->i_zone[0]);
-                                tty_table[current->tty].pgrp = current->pgrp;
+                if (MAJOR(inode->i_zone[0])==4) { // 串行终端
+                        if (current->leader && current->tty<0) { // 当前进程是进程组首进程 并且 当前进程的tty < 0 
+                                current->tty = MINOR(inode->i_zone[0]); // 设置当前进程的tty为打开文件的设备号
+                                tty_table[current->tty].pgrp = current->pgrp; // 设置“终端表”中“当前进程对应项”的“进程组号” 为 “当前进程”的“进程组号” 
                         }
-                } else if (MAJOR(inode->i_zone[0])==5)
-                        if (current->tty<0) {
-                                iput(inode);
-                                current->filp[fd]=NULL;
-                                f->f_count=0;
-                                return -EPERM;
+                } else if (MAJOR(inode->i_zone[0])==5) // 终端
+                        if (current->tty<0) { // 如果当前进程的终端号 < 0 : 没有对应的控制终端
+                                iput(inode); // 放回i节点
+                                current->filp[fd]=NULL; // 清空进程文件表项
+                                f->f_count=0; // 设置系统文件表项引用计数为0
+                                return -EPERM; // 返回 -EPERM 
                         }
         }
 /* Likewise with block-devices: check for floppy_change */
-        if (S_ISBLK(inode->i_mode))
-                check_disk_change(inode->i_zone[0]);
-        f->f_mode = inode->i_mode;
-        f->f_flags = flag;
-        f->f_count = 1;
-        f->f_inode = inode;
-        f->f_pos = 0;
-        return (fd);
+        if (S_ISBLK(inode->i_mode)) // 块设备文件
+                check_disk_change(inode->i_zone[0]); // 校验软盘是否更换过，更换过则需要失效高速缓冲区中所有的缓冲块
+        
+        f->f_mode = inode->i_mode; // 设置文件属性域
+        f->f_flags = flag; // 设置文件打开标志
+        f->f_count = 1; // 设置文件引用计数
+        f->f_inode = inode; // 设置文件对应的i节点
+        f->f_pos = 0; // 设置文件的读写偏移指针
+        return (fd); // 返回对应文件描述符
 }
 
+/**
+ * 创建文件
+ *
+ * pathname: 路径名
+ * mode: 指定文件的属性，这些属性有 S_IRWXU, S_IRUSR, S_IRWXG 等
+ *
+ * 成功：返回文件描述符，失败：返回错误码
+ * 
+ */
 int sys_creat(const char * pathname, int mode)
 {
         return sys_open(pathname, O_CREAT | O_TRUNC, mode);
 }
 
+/**
+ * 关闭文件
+ *
+ * fd: 文件描述符
+ *
+ * 成功：返回 0，失败：返回出错码
+ * 
+ */
 int sys_close(unsigned int fd)
 {	
         struct file * filp;
 
-        if (fd >= NR_OPEN)
-                return -EINVAL;
-        current->close_on_exec &= ~(1<<fd);
-        if (!(filp = current->filp[fd]))
-                return -EINVAL;
-        current->filp[fd] = NULL;
-        if (filp->f_count == 0)
-                panic("Close: file count is 0");
-        if (--filp->f_count)
-                return (0);
-        iput(filp->f_inode);
-        return (0);
+        if (fd >= NR_OPEN) // 文件描述符 > 进程允许打开的文件个数 
+                return -EINVAL; // 返回 -EINVAL 
+        current->close_on_exec &= ~(1<<fd); // 复位“执行时关闭文件句柄位图”(close_on_exec)中这个文件描述符对应的位：设置为 0 
+        if (!(filp = current->filp[fd])) // 进程文件表对应项 == NULL 
+                return -EINVAL; // 返回 -EINVAL
+        current->filp[fd] = NULL; // 进程文件表对应项置为 NULL 
+        if (filp->f_count == 0) // 文件引用计数为0
+                panic("Close: file count is 0"); // 报错，死机
+        if (--filp->f_count) // 文件引用计数减少 1，并判断是否为 0 
+                return (0); // 文件引用计数依旧大于0，直接返回0，退出
+        iput(filp->f_inode); // 文件引用计数等于0，现在可以释放文件对应的i节点
+        return (0); // 返回0，作为成功标志
 }
