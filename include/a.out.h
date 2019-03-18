@@ -135,6 +135,7 @@ struct exec {
 #define N_BSSADDR(x) (N_DATADDR(x) + (x).a_data)
 #endif
 
+
 #ifndef N_NLIST_DECLARED
 struct nlist {
         union {
