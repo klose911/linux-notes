@@ -45,45 +45,79 @@ extern int sys_close(int fd); // 关闭文件系统调用
  * memory and creates the pointer tables from them, and puts their
  * addresses on the "stack", returning the new stack pointer value.
  */
+
+/*
+ * 'create_tables' 函数在新进程的内存中解析环境变量和参数字符串，由此创建对应的指针表
+ * 并将它们的地址放到“栈”上，然后返回栈顶的指针值
+ * 
+ */
+
+/*
+ * 在新进程的栈中创建环境变量和参数的指针表
+ *
+ * p: 参数/环境信息偏移指针
+ * argc: 参数个数
+ * envc: 环境变量个数
+ *
+ * 返回：栈顶指针值
+ *
+ * 注意：这里的p是已经调整过的，相对数据段的偏移，而不再是参数/环境变量空间中的偏移值！！！
+ * 
+ */
 static unsigned long * create_tables(char * p,int argc,int envc)
 {
         unsigned long *argv,*envp;
         unsigned long * sp;
 
-        sp = (unsigned long *) (0xfffffffc & (unsigned long) p);
-        sp -= envc+1;
-        envp = sp;
-        sp -= argc+1;
-        argv = sp;
-        put_fs_long((unsigned long)envp,--sp);
-        put_fs_long((unsigned long)argv,--sp);
-        put_fs_long((unsigned long)argc,--sp);
+        // 栈指针是以4字节（1节）为边界进行对齐的，因此这里需要让sp成为4的整数倍值
+        sp = (unsigned long *) (0xfffffffc & (unsigned long) p); // 最后2位设为0
+        sp -= envc+1; // sp向下移动，空出 envc + 1个环境变量指针(long *)占用的空间，因为环境变量表最后必须以NULL作为结束
+        envp = sp; // 环境变量表指针指向sp当前位置
+        sp -= argc+1; // sp向下移动，空出 argc + 1个参数指针(long *)占用的空间，同样参数表最后必须以NULL作为结束
+        argv = sp; // 参数表指针指向sp当前位置
+        put_fs_long((unsigned long)envp,--sp); // 环境变量表指针入栈
+        put_fs_long((unsigned long)argv,--sp); // 参数表指针入栈
+        put_fs_long((unsigned long)argc,--sp); // 参数个数入栈
+        // 遍历参数字符串表
         while (argc-->0) {
-                put_fs_long((unsigned long) p,argv++);
-                while (get_fs_byte(p++)) /* nothing */ ;
+                put_fs_long((unsigned long) p,argv++); // 把“当前参数字符串”的“地址”放入“参数指针表”
+                while (get_fs_byte(p++)); // 移动到下一个参数字符串
         }
-        put_fs_long(0,argv);
+        put_fs_long(0,argv); // 在参数指针表的最后压入一个NULL指针作为结束
+        // 遍历环境变量字符串表
         while (envc-->0) {
-                put_fs_long((unsigned long) p,envp++);
-                while (get_fs_byte(p++)) /* nothing */ ;
+                put_fs_long((unsigned long) p,envp++); // 把“当前环境变量字符串”的“地址”放入“环境变量指针表”
+                while (get_fs_byte(p++)); // 移动到下一个环境变量字符串
         }
-        put_fs_long(0,envp);
-        return sp;
+        put_fs_long(0,envp); // 在环境变量指针表的最后压入一个NULL指针作为结束
+        return sp; // 返回栈顶指针值
 }
 
 /*
  * count() counts the number of arguments/envelopes
+ */
+
+/*
+ * 计算命令行参数/环境变量的个数
+ *
+ * argv: 参数指针数组，最后一项是NULL
+ *
+ * 返回：参数个数
+ *
+ * 注意：这里argv的指针是相对于数据段！！！
+ * 
  */
 static int count(char ** argv)
 {
         int i=0;
         char ** tmp;
 
-        if ((tmp = argv))
-                while (get_fs_long((unsigned long *) (tmp++)))
-                        i++;
+        if ((tmp = argv)) // 如果argv是NULL 直接返回0
+                // 遍历指针数组，直到指针值为NULL 
+                while (get_fs_long((unsigned long *) (tmp++))) 
+                        i++; //递增参数个数
 
-        return i;
+        return i; 
 }
 
 /*
@@ -199,29 +233,43 @@ static unsigned long copy_strings(int argc,char ** argv,unsigned long *page,
         return p; // 返回“参数/环境“空间中”已复制“的”头部偏移值“
 }
 
+/*
+ * 修改任务的局部描述符表
+ *
+ * text_size: 执行文件头中a_text字段对应的代码段长度值
+ * page: 参数/环境变量空间中页面指针数组
+ *
+ * 返回：数据段限长值(64MB)
+ * 
+ */
 static unsigned long change_ldt(unsigned long text_size,unsigned long * page)
 {
         unsigned long code_limit,data_limit,code_base,data_base;
         int i;
 
+        // 计算代码段长度: a_text长度以页(4KB)对齐
         code_limit = text_size+PAGE_SIZE -1;
         code_limit &= 0xFFFFF000;
+        // 数据段长度设置为64MB 
         data_limit = 0x4000000;
-        code_base = get_base(current->ldt[1]);
-        data_base = code_base;
-        set_base(current->ldt[1],code_base);
-        set_limit(current->ldt[1],code_limit);
-        set_base(current->ldt[2],data_base);
-        set_limit(current->ldt[2],data_limit);
+        code_base = get_base(current->ldt[1]); // 获取当前进程的局部描述符表中代码段的段基址
+        data_base = code_base; // 代码段和数据段的段地址应该相同
+        set_base(current->ldt[1],code_base); // 这里其实不需要再次设置局部描述符表中代码段的基址
+        set_limit(current->ldt[1],code_limit); // 设置局部描述符表中代码段的限长
+        set_base(current->ldt[2],data_base); // 这里其实也不需要再次设置局部描述符表中数据段的基址
+        set_limit(current->ldt[2],data_limit); // 设置局部描述符表中数据段的限长
 /* make sure fs points to the NEW data segment */
-        __asm__("pushl $0x17\n\tpop %%fs"::);
-        data_base += data_limit;
+        // 确信fs寄存器已经指向新的任务数据段 
+        __asm__("pushl $0x17\n\tpop %%fs"::); // fs段寄存器放入”局部描述符表“的”任务数据段“对应的选择子'0x17'
+        // ”参数/环境变量空间“中的内存页”映射“到”数据段“的末尾
+        data_base += data_limit; // database 指向数据段的末尾
+        // 从数据段末尾开始一页一页地放入 MAX_ARG_PAGES - 1 页
         for (i=MAX_ARG_PAGES-1 ; i>=0 ; i--) {
-                data_base -= PAGE_SIZE;
-                if (page[i])
-                        put_page(page[i],data_base);
+                data_base -= PAGE_SIZE; // data_base指向下一页
+                if (page[i]) // 如果该页面存在，绝大部分情况实际上不会用满 MAX_ARG_PAGES 个内存页
+                        put_page(page[i],data_base); // 把物理地址 page[i] 映射到 线性空间地址 data_base 上  
         }
-        return data_limit;
+        return data_limit; // 返回段限长 64MB 
 }
 
 /*
