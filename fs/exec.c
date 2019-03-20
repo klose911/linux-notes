@@ -275,88 +275,125 @@ static unsigned long change_ldt(unsigned long text_size,unsigned long * page)
 /*
  * 'do_execve()' executes a new program.
  */
+
+/**
+ * 加载并执行子进程
+ *
+ * eip: 调用系统中断的程序代码指针
+ * tmp: 系统中断在调用 _sys_execve()时候的返回地址，无用
+ * filename: 被执行的文件名指针
+ * argv: 命令行参数指针数组的指针
+ * envp: 环境变量指针数组的指针
+ *
+ * 成功：无返回，失败：设置错误号，返回 -1
+ * 
+ * 该函数是系统中断调用(int 0x80) 功能号 __NR_execve 调用的函数
+ * 函数的参数是“进入系统调用处理过程”后直到“本系统调用处理过程”和调用本函数前逐步压入栈中的值：
+ * 1. system_call.s 第109行～第111行入栈的edx, ecx, ebx, 分别对应 **envp, **argv和 *filename
+ * 2. system_call.s 第121行，调用sys_call_table中sys_execve函数指针时压入栈的返回地址tmp（无用）
+ * 3. system_call.s 第258行，调用本函数前入栈的指向栈中调用系统中断的程序代码指针eip
+ * 
+ */
 int do_execve(unsigned long * eip,long tmp,char * filename,
               char ** argv, char ** envp)
 {
         struct m_inode * inode;
         struct buffer_head * bh;
         struct exec ex;
-        unsigned long page[MAX_ARG_PAGES];
+        unsigned long page[MAX_ARG_PAGES]; // “命令行参数/环境变量”空间页面指针数组
         int i,argc,envc;
-        int e_uid, e_gid;
+        int e_uid, e_gid; // 有效用户ID，有效组ID 
         int retval;
-        int sh_bang = 0;
-        unsigned long p=PAGE_SIZE*MAX_ARG_PAGES-4;
+        int sh_bang = 0; // 是否需要执行脚本
+        unsigned long p=PAGE_SIZE*MAX_ARG_PAGES-4; // p 指向“命令行参数/环境变量”空间页面的最后一个长字 (4K * 128 - 4) 
 
-        if ((0xffff & eip[1]) != 0x000f)
-                panic("execve called from supervisor mode");
-        for (i=0 ; i<MAX_ARG_PAGES ; i++)	/* clear page-table */
+        // 参数eip[1]是本次系统调用的原用户程序代码段寄存器CS值
+        // 其中的代码段选择子必须是 0x000f，否则只可能是内核代码段的选择子 0x0008，但这是绝对不允许的，因为内核代码是常驻内存而不能被替换掉的！！！  
+        if ((0xffff & eip[1]) != 0x000f) // eip 是内核代码段选择子
+                panic("execve called from supervisor mode"); // 报错，死机
+        for (i=0 ; i<MAX_ARG_PAGES ; i++)	// 初始化“命令行参数/环境变量”空间页面指针数组
                 page[i]=0;
-        if (!(inode=namei(filename)))		/* get executables inode */
-                return -ENOENT;
-        argc = count(argv);
-        envc = count(envp);
+        // 根据执行文件名获得对应的i节点
+        if (!(inode=namei(filename))) // 获取i节点失败		
+                return -ENOENT; // 返回错误码 -ENOENT
+        argc = count(argv); // 计算命令行参数的个数
+        envc = count(envp); // 计算环境变量的个数
 	
 restart_interp:
-        if (!S_ISREG(inode->i_mode)) {	/* must be regular file */
-                retval = -EACCES;
-                goto exec_error2;
+        if (!S_ISREG(inode->i_mode)) {	// 可执行文件不是常规文件
+                retval = -EACCES; // 设置错误号为 -EACCES 
+                goto exec_error2; // 跳转到 exec_error2 作为出错处理
         }
-        i = inode->i_mode;
-        e_uid = (i & S_ISUID) ? inode->i_uid : current->euid;
-        e_gid = (i & S_ISGID) ? inode->i_gid : current->egid;
-        if (current->euid == inode->i_uid)
-                i >>= 6;
+        i = inode->i_mode; // 获得文件的属性
+        // 如果“设置-用户-ID”位被置位，有效用户ID被设置为文件的宿主ID，反之为当前进程的有效用户ID 
+        e_uid = (i & S_ISUID) ? inode->i_uid : current->euid; // 获取有效用户ID
+        // 和有效用户ID逻辑一致
+        e_gid = (i & S_ISGID) ? inode->i_gid : current->egid; // 获取有效组ID 
+        if (current->euid == inode->i_uid) // 进程的有效用户ID == 文件的宿主ID 
+                i >>= 6; // 文件属性右移6位，使得最后3位是文件宿主的权限
         else if (current->egid == inode->i_gid)
-                i >>= 3;
-        if (!(i & 1) &&
-            !((inode->i_mode & 0111) && suser())) {
-                retval = -ENOEXEC;
-                goto exec_error2;
+                i >>= 3; // 文件属性右移3位，使得最后3位是文件组的权限
+        // 反之最后三位本来就是该文件对应“其他用户”的权限
+        if (!(i & 1) && // 文件对应的可执行权限位没有设置
+            !((inode->i_mode & 0111) && suser())) { // “文件对应的其他用户没有任何权限”或者“当前进程的用户不是root用户”
+                retval = -ENOEXEC; // 设置错误号为 -ENOEXEC 
+                goto exec_error2; // 跳转到 exec_error2 作为出错处理 
         }
-        if (!(bh = bread(inode->i_dev,inode->i_zone[0]))) {
-                retval = -EACCES;
-                goto exec_error2;
+        // 有执行文件的权限，从执行文件读出头部数据
+        // 读取可执行文件的第一个数据块（执行头）到高速缓冲区
+        if (!(bh = bread(inode->i_dev,inode->i_zone[0]))) { // 读取执行文件第一个数据块到高速缓冲区失败
+                retval = -EACCES; // 设置错误号为 -EACCES
+                goto exec_error2; // 跳转到 exec_error2 作为出错处理
         }
-        ex = *((struct exec *) bh->b_data);	/* read exec-header */
+        ex = *((struct exec *) bh->b_data);	// 读取可执行文件的执行头
+        // 可执行文件的以 '#!' 开头：说明这是一个脚本文件，并且 sh_bang 不等于 0 
+        // 注意：处理完脚本文件，会重新回到上面的 restart_interp标号执行，再次执行到这里的时候 sh_bang 已经被设置为1
         if ((bh->b_data[0] == '#') && (bh->b_data[1] == '!') && (!sh_bang)) {
                 /*
                  * This section does the #! interpretation.
                  * Sorta complicated, but hopefully it will work.  -TYT
                  */
 
+                // 下面的代码很不好理解，我需要调试工具可能才能完全理解 :-(
                 char buf[1023], *cp, *interp, *i_name, *i_arg;
                 unsigned long old_fs;
 
-                strncpy(buf, bh->b_data+2, 1022);
-                brelse(bh);
-                iput(inode);
-                buf[1022] = '\0';
-                if ((cp = strchr(buf, '\n'))) {
-                        *cp = '\0';
+                // 从脚本文件提取解释器程序名及其参数，脚本文件名等组合放入环境参数表中
+                // 首先提取脚本文件开始的'#!'之后的字符串到buf中，其中含有解释器执行文件名，可能还含义参数等
+                strncpy(buf, bh->b_data+2, 1022); 
+                brelse(bh); // 释放高速缓存块
+                iput(inode); // 释放i节点
+                buf[1022] = '\0'; 
+                if ((cp = strchr(buf, '\n'))) { // cp == buf中第一个 '\n'的下标
+                        *cp = '\0'; // 第一个换行符用'\0'(NULL字符)代替：相当于 buf 变成了脚本第一行的内容（C语言的字符串以'\0'作为结尾）
+                        // 1. cp 指向 buf
+                        // 2. 去掉开头的空格和制表符（'#!'后面可能跟着空格）
                         for (cp = buf; (*cp == ' ') || (*cp == '\t'); cp++);
                 }
-                if (!cp || *cp == '\0') {
-                        retval = -ENOEXEC; /* No interpreter name found */
-                        goto exec_error1;
+                if (!cp || *cp == '\0') { // 脚本文件第一行没有内容
+                        retval = -ENOEXEC; // 设置错误号为 -ENOEXEC 
+                        goto exec_error1; // 执行 exec_error1 出错处理
                 }
-                interp = i_name = cp;
+                interp = i_name = cp; // 得到解释器的名字
                 i_arg = 0;
+                // 继续遍历脚本文件，找到其中的第一个字符串，这应该是解释器程序名
                 for ( ; *cp && (*cp != ' ') && (*cp != '\t'); cp++) {
-                        if (*cp == '/')
-                                i_name = cp+1;
+                        if (*cp == '/') // 这时候只支持 #!/sh 这种，因此一旦找到'/'，就认为后面的'sh' 是解释器程序名
+                                i_name = cp+1; // i_name指向解释器程序名 
                 }
                 if (*cp) {
-                        *cp++ = '\0';
-                        i_arg = cp;
+                        *cp++ = '\0'; // 解释程序名的末尾加NULL字符
+                        i_arg = cp; // i_arg指向解释器参数
                 }
                 /*
                  * OK, we've parsed out the interpreter name and
                  * (optional) argument.
                  */
-                if (sh_bang++ == 0) {
-                        p = copy_strings(envc, envp, page, p, 0);
-                        p = copy_strings(--argc, argv+1, page, p, 0);
+                // 现在开始把’解释器程序名‘(i_name)和’解释器参数‘(i_arg)和‘脚本文件名’作为解释程序的参数放入“参数/环境变量”空间中去
+                if (sh_bang++ == 0) { // 判断 sh_bang == 0， 然后 + 1 
+                        p = copy_strings(envc, envp, page, p, 0); // 把本函数参数中的 env, envp, 从用户空间放入“参数/环境变量”空间
+                        // 注意：这里放入命令行参数比“调用参数中的argc”少一个，少掉的一个是原来的脚本文件名
+                        p = copy_strings(--argc, argv+1, page, p, 0); // 把本函数参数中的 argc - 1, argv + 1, 从用户空间放入“参数/环境变量”空间
                 }
                 /*
                  * Splice in (1) the interpreter's name for argv[0]
@@ -366,30 +403,45 @@ restart_interp:
                  * This is done in reverse order, because of how the
                  * user environment and arguments are stored.
                  */
-                p = copy_strings(1, &filename, page, p, 1);
-                argc++;
-                if (i_arg) {
-                        p = copy_strings(1, &i_arg, page, p, 2);
-                        argc++;
+
+                /*
+                 * 拼接 (1) argv[0] 放入解释器的名字
+                 *     (2) （可选）解释器参数
+                 *     (3) 脚本程序的名称
+                 *
+                 * 由于环境变量和参数存放的顺序，导致这里是逆序处理的
+                 * 
+                 */
+                // 注意：这里最后一个参数被设置为1，因为脚本文件名的指针来自于内核空间
+                p = copy_strings(1, &filename, page, p, 1); // 逆向复制脚本文件名
+                argc++; // argc 自增 1 
+                if (i_arg) { // 脚本文件中存在参数
+                        // 注意：这里是从内核空间中拷贝参数字符串（脚本文件的字符串已经被读入内核空间），所以这里的最后参数设置为2！！！
+                        p = copy_strings(1, &i_arg, page, p, 2); // 拷贝脚本文件中的参数到“参数/环境变量”空间
+                        argc++; // 增加 argc 
                 }
-                p = copy_strings(1, &i_name, page, p, 2);
-                argc++;
-                if (!p) {
-                        retval = -ENOMEM;
-                        goto exec_error1;
+                p = copy_strings(1, &i_name, page, p, 2); // 解释器程序名拷贝到“参数/环境变量”空间，同样的“解释器程序名”对应的字符串也已经在内核空间中
+                argc++; // 继续增加 argc 
+                if (!p) { // 前面的拷贝失败
+                        retval = -ENOMEM; // 设置错误号 -ENOMEM 
+                        goto exec_error1; // 执行 exec_error1 出错处理
                 }
                 /*
                  * OK, now restart the process with the interpreter's inode.
                  */
-                old_fs = get_fs();
-                set_fs(get_ds());
-                if (!(inode=namei(interp))) { /* get executables inode */
-                        set_fs(old_fs);
-                        retval = -ENOENT;
-                        goto exec_error1;
+                // 最后取得解释器程序的i节点，并执行重新回到 restart_interp 来执行解释器
+                // 注意：为了获得解释器的i节点，需要调用namei()函数，但是该函数所使用的参数（文件名）是根据“用户数据段”寄存器fs为段基址
+                //      但是这里的interp的地址是以“内核数据段”寄存器ds为段基址！！！
+                old_fs = get_fs(); // 临时保存“用户数据段”的段基址fs寄存器中的内容 
+                set_fs(get_ds()); // 设置fs寄存器的内容为ds段寄存器的内容（内核数据段的段基址）
+                // 获取解释器对应的i节点，并重新设置给inode变量
+                if (!(inode=namei(interp))) { // 获取解释器i节点失败 
+                        set_fs(old_fs); // 恢复fs寄存器
+                        retval = -ENOENT; // 设置错误号为 -ENOENT 
+                        goto exec_error1; // 执行 exec_error1 出错处理
                 }
-                set_fs(old_fs);
-                goto restart_interp;
+                set_fs(old_fs); // 恢复fs寄存器
+                goto restart_interp; // 重新开始执行 restart_interp 标号
         }
         brelse(bh);
         if (N_MAGIC(ex) != ZMAGIC || ex.a_trsize || ex.a_drsize ||
