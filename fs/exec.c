@@ -333,7 +333,7 @@ restart_interp:
                 i >>= 6; // 文件属性右移6位，使得最后3位是文件宿主的权限
         else if (current->egid == inode->i_gid)
                 i >>= 3; // 文件属性右移3位，使得最后3位是文件组的权限
-        // 反之最后三位本来就是该文件对应“其他用户”的权限
+        // 如果不满足上面2种情况，则最后三位本来就是该文件对应“其他用户”的权限
         if (!(i & 1) && // 文件对应的可执行权限位没有设置
             !((inode->i_mode & 0111) && suser())) { // “文件对应的其他用户没有任何权限”或者“当前进程的用户不是root用户”
                 retval = -ENOEXEC; // 设置错误号为 -ENOEXEC 
@@ -359,7 +359,7 @@ restart_interp:
                 unsigned long old_fs;
 
                 // 从脚本文件提取解释器程序名及其参数，脚本文件名等组合放入环境参数表中
-                // 首先提取脚本文件开始的'#!'之后的字符串到buf中，其中含有解释器执行文件名，可能还含义参数等
+                // 首先提取脚本文件开始的'#!'之后的字符串到buf中，其中含有解释器执行文件名，可能还含有额外的参数等
                 strncpy(buf, bh->b_data+2, 1022); 
                 brelse(bh); // 释放高速缓存块
                 iput(inode); // 释放i节点
@@ -391,9 +391,9 @@ restart_interp:
                  */
                 // 现在开始把’解释器程序名‘(i_name)和’解释器参数‘(i_arg)和‘脚本文件名’作为解释程序的参数放入“参数/环境变量”空间中去
                 if (sh_bang++ == 0) { // 判断 sh_bang == 0， 然后 + 1 
-                        p = copy_strings(envc, envp, page, p, 0); // 把本函数参数中的 env, envp, 从用户空间放入“参数/环境变量”空间
+                        p = copy_strings(envc, envp, page, p, 0); // 把本函数参数中的”环境变量“从用户空间放入“参数/环境变量”空间
                         // 注意：这里放入命令行参数比“调用参数中的argc”少一个，少掉的一个是原来的脚本文件名
-                        p = copy_strings(--argc, argv+1, page, p, 0); // 把本函数参数中的 argc - 1, argv + 1, 从用户空间放入“参数/环境变量”空间
+                        p = copy_strings(--argc, argv+1, page, p, 0); // 把本函数参数中的”命令行参数“从用户空间放入“参数/环境变量”空间
                 }
                 /*
                  * Splice in (1) the interpreter's name for argv[0]
@@ -443,59 +443,101 @@ restart_interp:
                 set_fs(old_fs); // 恢复fs寄存器
                 goto restart_interp; // 重新开始执行 restart_interp 标号
         }
-        brelse(bh);
+
+        // 此时缓冲块中的可执行文件的执行头已经复制到内存中的ex结构内
+        brelse(bh); // 释放高速缓冲块
+        // 校验可执行文件的执行头结构
+        // 1. 可执行文件格式不是“支持分页的可执行文件”(ZMAGIC)
+        // 2. 代码重定位信息长度 （a_trsize域） == 0
+        // 3. 数据重定位信息长度（a_drsize域） == 0
+        // 4. 代码段长度(a_text) + 数据段长度(a_data) + bss段长度(a_bss) > 50MB (0x3000000)
+        // 5. 可执行文件的大小 (i_size) < 代码段长度(a_text) + 数据段长度(a_text) + 符号表长度(a_syms) + 执行头部分(NTXTOFF(ex)) 
         if (N_MAGIC(ex) != ZMAGIC || ex.a_trsize || ex.a_drsize ||
             ex.a_text+ex.a_data+ex.a_bss>0x3000000 ||
             inode->i_size < ex.a_text+ex.a_data+ex.a_syms+N_TXTOFF(ex)) {
-                retval = -ENOEXEC;
-                goto exec_error2;
+                retval = -ENOEXEC; // 设置错误号为 -ENOEXEC
+                goto exec_error2; // 跳转到 exec_error2 作为出错处理
         }
-        if (N_TXTOFF(ex) != BLOCK_SIZE) {
+
+        // 执行头必须以1024字节的边界处
+        if (N_TXTOFF(ex) != BLOCK_SIZE) { // 执行头长度 != 1个逻辑块长度
                 printk("%s: N_TXTOFF != BLOCK_SIZE. See a.out.h.", filename);
-                retval = -ENOEXEC;
-                goto exec_error2;
+                retval = -ENOEXEC; // 设置错误号为 -ENOEXEC
+                goto exec_error2; // 跳转到 exec_error2 作为出错处理
         }
-        if (!sh_bang) {
-                p = copy_strings(envc,envp,page,p,0);
-                p = copy_strings(argc,argv,page,p,0);
-                if (!p) {
-                        retval = -ENOMEM;
-                        goto exec_error2;
+        // 接下来处理非脚本文件时候的“命令行参数“/”环境变量“的放置
+        if (!sh_bang) { // a.out格式的可执行文件
+                p = copy_strings(envc,envp,page,p,0); // 把本函数参数中的 ”环境变量“从用户空间放入“参数/环境变量”空间
+                p = copy_strings(argc,argv,page,p,0); // 把本函数参数中的 ”命令行参数“从用户空间放入“参数/环境变量”空间
+                if (!p) { // 前面的拷贝失败
+                        retval = -ENOMEM; // 设置错误号 -ENOMEM
+                        goto exec_error2; // 跳转到 exec_error2 作为出错处理
                 }
         }
-/* OK, This is the point of no return */
-        if (current->executable)
-                iput(current->executable);
-        current->executable = inode;
-        for (i=0 ; i<32 ; i++)
+/* OK, This is the point of no return */ // 现在开始do_execve函数没有返回值了， 开弓没有回头路 :-)
+        if (current->executable) // 如果”当前进程“的”可执行文件i节点“已经被设置
+                iput(current->executable); // 放回”当前进程“的”可执行文件i节点“
+        current->executable = inode; // 设置”当前进程“的”可执行文件i节点“为‘inode’变量
+        
+        // 置空当前进程的所有信号处理句柄
+        // 注意：这里的做得比较粗糙
+        // 1. 仅仅处理了信号句柄，而对sa_flags, sa_mask 没有处理
+        // 2. 信号句柄是 SIG_IGN 设置为NULL，无须复位
+        for (i=0 ; i<32 ; i++) 
                 current->sigaction[i].sa_handler = NULL;
+        
+        // 遍历当前进程打开所有文件的描述符表（这些文件文件描述符继承于父进程）
         for (i=0 ; i<NR_OPEN ; i++)
-                if ((current->close_on_exec>>i)&1)
-                        sys_close(i);
-        current->close_on_exec = 0;
-        free_page_tables(get_base(current->ldt[1]),get_limit(0x0f));
-        free_page_tables(get_base(current->ldt[2]),get_limit(0x17));
-        if (last_task_used_math == current)
-                last_task_used_math = NULL;
-        current->used_math = 0;
-        p += change_ldt(ex.a_text,page)-MAX_ARG_PAGES*PAGE_SIZE;
-        p = (unsigned long) create_tables((char *)p,argc,envc);
+                if ((current->close_on_exec>>i)&1) // 如果文件描述符在”close_on_exec“位图中所对应的位被置位
+                        sys_close(i); // 关闭对应的文件描述符
+        current->close_on_exec = 0; // 重置close_on_exec位图
+
+        // 注意：下面的内存释放完毕后，新执行文件并没有占用任何内存页面
+        // 因此在处理器真正执行新执行文件代码时会触发”缺页异常中断“：
+        // 1. 内存管理程序开始执行缺页处理，为新执行申请内存页面和设置相关页表项
+        // 2. 把相关执行文件页面读入内存中
+        free_page_tables(get_base(current->ldt[1]),get_limit(0x0f)); // 释放当前进程的代码段所对应的内存表映射的物理内存页面和页表本身
+        free_page_tables(get_base(current->ldt[2]),get_limit(0x17)); // 释放当前进程的数据段所对应的内存表映射的物理内存页面和页表本身
+        
+        if (last_task_used_math == current) // 如果原来进程是最后一个使用数字协处理器的进程
+                last_task_used_math = NULL; // 重置最后一个使用数字协处理器的进程指针
+        current->used_math = 0; // 当前进程中是否使用“数字协处理器”设置为”假“
+
+        // 1. 修改任务的局部描述符表
+        // 2. p 指针从“环境/参数空间”调整为当前进程的“数据段“作为起始的偏移： 
+        p += change_ldt(ex.a_text,page)-MAX_ARG_PAGES*PAGE_SIZE; // p += 64MB - 32 * 4KB = 64MB - 128KB  
+        p = (unsigned long) create_tables((char *)p,argc,envc); // 在栈中放置”环境变量“和”命令行参数“的指针数组表
+        
+        // 1. 重新设置当前进程的代码段末尾指针： end_code = a_text
+        // 2. 重新设置当前进程的数据段末尾指针： end_data = end_code + a_data 
+        // 3. 计算当前进程的堆尾指针： brk = a_bss + end_data = a_bss + a_data + a_txt
+        // 堆尾指针一般用于动态分配内存使用(malloc, free ...)
         current->brk = ex.a_bss +
                 (current->end_data = ex.a_data +
                  (current->end_code = ex.a_text));
-        current->start_stack = p & 0xfffff000;
-        current->euid = e_uid;
-        current->egid = e_gid;
-        i = ex.a_text+ex.a_data;
+        
+        // 虽然此时p指向的应该是当前栈顶了，但还是需要页面对齐：0x1000 = 4KB 
+        current->start_stack = p & 0xfffff000; // 设置当前进程的栈开始指针
+
+        // 如果可执行文件的”设置-用户-位”被设置，则可能改变进程的有效用户ID
+        current->euid = e_uid; // 重新设置当前进程的有效用户ID 
+        current->egid = e_gid; // 和上面类似：重新设置当前进程的有效组ID
+        i = ex.a_text+ex.a_data; // 计算
         while (i&0xfff)
                 put_fs_byte(0,(char *) (i++));
+        // 将“系统中断”中的“处理程序”在堆栈中的“代码指针”(eip[0])替换为“新执行程序的入口点”(a_entry)
         eip[0] = ex.a_entry;		/* eip, magic happens :-) */
-        eip[3] = p;			/* stack pointer */
+        // 将“系统中断”中的“处理程序”在堆栈中的“栈指针”(esp = eip[3])替换为p
+        eip[3] = p; // 实际上 current->start_stark 有可能和 p 不一样，不明白为什么要这么设置 start_stack域？?
+        // 下面的return指令：会弹出栈中的数据，并使得CPU去执行eip[0]位置的“新执行程序的入口点”
+        // 所以实际上不会返回到原来系统中断调用的程序中去了，好比施加了魔法一样 :-)
         return 0;
+        
+        // 注意：exec_error1 和 exec_error2的区别在于： exec_error2 需要额外的释放可执行文件的i节点！！！
 exec_error2:
-        iput(inode);
+        iput(inode); // 释放i节点
 exec_error1:
-        for (i=0 ; i<MAX_ARG_PAGES ; i++)
+        for (i=0 ; i<MAX_ARG_PAGES ; i++) // 释放保存“命令行参数和环境变量”字符串的内存页面
                 free_page(page[i]);
-        return(retval);
+        return(retval); // 返回出错码
 }
