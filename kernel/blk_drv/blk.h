@@ -163,7 +163,7 @@ static inline void end_request(int uptodate)
         CURRENT = CURRENT->next;
 }
 
-#define INIT_REQUEST
+#define INIT_REQUEST \
 repeat:                                                             \
         if (!CURRENT)                                               \
                 return;                                             \
