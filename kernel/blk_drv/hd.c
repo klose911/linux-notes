@@ -13,17 +13,21 @@
  *  modified by Drew Eckhardt to check nr of hd's from the CMOS.
  */
 
-#include <linux/config.h>
+#include <linux/config.h> // 内核配置头文件，可以在这里定义硬盘参数HD_TYPE（默认从CMOS读取）
 #include <linux/sched.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
-#include <linux/hdreg.h>
+#include <linux/hdreg.h> // 磁盘参数表头文件
 #include <asm/system.h>
 #include <asm/io.h>
 #include <asm/segment.h>
 
-#define MAJOR_NR 3
-#include "blk.h"
+/*
+ * 主设备号必须定义在'blk.h'前，因为在blk.h中会用到这个符号常数！！！
+ * 
+ */
+#define MAJOR_NR 3 // 硬盘主设备号
+#include "blk.h" // 块设备头文件
 
 #define CMOS_READ(addr) ({ \
 outb_p(0x80|addr,0x70); \

@@ -137,34 +137,50 @@ void (*DEVICE_INTR)(void) = NULL;
  */
 static void (DEVICE_REQUEST)(void);
 
+/*
+ * 释放高速缓冲块
+ *
+ * bh: 高速缓冲块头指针
+ * 
+ */
 static inline void unlock_buffer(struct buffer_head * bh)
 {
-        if (!bh->b_lock)
+        if (!bh->b_lock) // 高速缓冲块未锁定
                 printk(DEVICE_NAME ": free buffer being unlocked\n");
-        bh->b_lock=0;
-        wake_up(&bh->b_wait);
+        bh->b_lock=0; // 复位“高速缓冲块”的“锁定”标志
+        wake_up(&bh->b_wait); // 唤醒等待高速缓冲块的进程队列
 }
 
+/*
+ * 结束当前块请求
+ *
+ * uptodate: 更新标志，如果为 0， 则打印出错信息
+ * 
+ */
 static inline void end_request(int uptodate)
 {
-        DEVICE_OFF(CURRENT->dev);
-        if (CURRENT->bh) {
-                CURRENT->bh->b_uptodate = uptodate;
-                unlock_buffer(CURRENT->bh);
+        DEVICE_OFF(CURRENT->dev); // 关闭当前请求对应的设备
+        if (CURRENT->bh) { // 当前请求的"高速缓冲块头指针"不为NULL
+                CURRENT->bh->b_uptodate = uptodate; // 置位“高速缓冲块头指针”的“更新”标志
+                unlock_buffer(CURRENT->bh); // 释放高速缓冲块
         }
-        if (!uptodate) {
+        if (!uptodate) { // 打印错误信息
                 printk(DEVICE_NAME " I/O error\n\r");
                 printk("dev %04x, block %d\n\r",CURRENT->dev,
                        CURRENT->bh->b_blocknr);
         }
-        wake_up(&CURRENT->waiting);
-        wake_up(&wait_for_request);
-        CURRENT->dev = -1;
-        CURRENT = CURRENT->next;
+        wake_up(&CURRENT->waiting); // 唤醒等待“该读写请求项”的进程
+        wake_up(&wait_for_request); // 唤醒等待“获取空闲请求项”的进程
+        CURRENT->dev = -1; // 释放该读写请求项：dev = -1 表示该请求项“空闲” 
+        CURRENT = CURRENT->next; // 当前请求项指向下一个
 }
 
-#define INIT_REQUEST \
-repeat:                                                             \
+// 初始化请求项宏：用于对当前请求项进行一些有效性的判断
+// 1. 当前请求项为空：直接返回
+// 2. 当前请求项的设备号 ！= 驱动程序定义的设备号：报错，死机
+// 3. 当前请求项对应的高速缓冲块没有被锁定：报错，死机
+#define INIT_REQUEST                                                \
+        repeat:                                                     \
         if (!CURRENT)                                               \
                 return;                                             \
         if (MAJOR(CURRENT->dev) != MAJOR_NR)                        \
