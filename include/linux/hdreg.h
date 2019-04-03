@@ -67,17 +67,22 @@
 #define ECC_ERR		0x40	/* ? */
 #define	BBD_ERR		0x80	/* ? */
 
+/**
+ * 硬盘分区表项结构
+ * 
+ */
 struct partition {
-        unsigned char boot_ind;		/* 0x80 - active (unused) */
-        unsigned char head;		/* ? */
-        unsigned char sector;		/* ? */
-        unsigned char cyl;		/* ? */
-        unsigned char sys_ind;		/* ? */
-        unsigned char end_head;		/* ? */
-        unsigned char end_sector;	/* ? */
-        unsigned char end_cyl;		/* ? */
-        unsigned int start_sect;	/* starting sector counting from 0 */
-        unsigned int nr_sects;		/* nr of sectors in partition */
+        // 注意：4个分区只有一个是可引导分区！！！
+        unsigned char boot_ind; // 引导标志：0x00 - 不从该分区引导操作系统， 0x80 - 可以从该分区引号操作系统
+        unsigned char head; // 分区起始磁头号，有效值范围：0~255
+        unsigned char sector; // 分区起始柱面中扇区号（位0～5）（有效值范围：1~63）和柱面号高2位（位6～7）
+        unsigned char cyl; // 分区起始柱面号低8位，有效值范围：0～1023
+        unsigned char sys_ind; // 分区类型字节：0x0b - dos，0x80 - old minix，0x83 - linux 
+        unsigned char end_head; // 分区结束磁头号，有效值范围：0~255
+        unsigned char end_sector; // 分区结束柱面中扇区号（位0～5）（有效值范围：1~63）和柱面号高2位（位6～7
+        unsigned char end_cyl; // 分区结束柱面号低8位，有效值范围：0～102
+        unsigned int start_sect; // 分区起始物理扇区号（整个磁盘顺序计数的扇区号），从0开始计起！
+        unsigned int nr_sects; // 分区占用的扇区数
 };
 
 #endif
