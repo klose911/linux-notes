@@ -112,36 +112,55 @@ extern void hd_interrupt(void); // 硬盘中断处理过程(system_call.s)
 extern void rd_load(void); // 虚拟盘创建加载函数(ramdisk.c)  
 
 /* This may be used only once, enforced by 'static int callable' */
+
+/**
+ * 系统设置函数：读取 CMOS 和硬盘参数表结构，用于设置硬盘分区结构 hd_info，并尝试加载“RAM 虚拟盘” 和“根文件系统”
+ *
+ * BIOS: 指向硬盘参数表结构的指针（由初始化程序init/main.c中init()中设置）
+ *
+ * 成功：返回 0，失败：返回 -1
+ * 
+ * 硬盘参数表结构包含2个硬盘参数表的内容（共32字节），是从内存0x90080处复制得来，
+ * 0x90080处的硬盘参数表是由setup.s程序通过 rom bios功能获取到
+ *
+ * 注意：本函数仅在系统启动时被调用一次(init/main.c)，静态变量 callable作为是否已经调用的标志
+ * 
+ */
 int sys_setup(void * BIOS)
 {
-        static int callable = 1;
+        static int callable = 1; // 已经调用标志
         int i,drive;
         unsigned char cmos_disks;
         struct partition *p;
         struct buffer_head * bh;
-
-        if (!callable)
-                return -1;
+        
+        if (!callable) // 如果 callable == 0，本函数已经被调用过了
+                return -1; // 直接返回
         callable = 0;
+
+        // 没有在 include/linux/config.h 中定义常数 HD_TYPE（如果已经定义了，则hd_info数组已经被初始化好）
 #ifndef HD_TYPE
+        // 从BIOS指针处，依次读取硬盘参数结构表
         for (drive=0 ; drive<2 ; drive++) {
-                hd_info[drive].cyl = *(unsigned short *) BIOS;
-                hd_info[drive].head = *(unsigned char *) (2+BIOS);
-                hd_info[drive].wpcom = *(unsigned short *) (5+BIOS);
-                hd_info[drive].ctl = *(unsigned char *) (8+BIOS);
-                hd_info[drive].lzone = *(unsigned short *) (12+BIOS);
-                hd_info[drive].sect = *(unsigned char *) (14+BIOS);
+                hd_info[drive].cyl = *(unsigned short *) BIOS; // 柱面数
+                hd_info[drive].head = *(unsigned char *) (2+BIOS); // 磁头数
+                hd_info[drive].wpcom = *(unsigned short *) (5+BIOS); // 写前预补偿柱面号
+                hd_info[drive].ctl = *(unsigned char *) (8+BIOS); // 控制字节
+                hd_info[drive].lzone = *(unsigned short *) (12+BIOS); // 磁头着陆区柱面号
+                hd_info[drive].sect = *(unsigned char *) (14+BIOS); // 每柱面扇区数
                 BIOS += 16;
         }
-        if (hd_info[1].cyl)
+        // 如果系统只有一个硬盘，那么第二个硬盘对应的16字节会全部清零
+        if (hd_info[1].cyl) // 判断第二个硬盘的柱面数是否为0，就可以知道是否存在第二个硬盘
                 NR_HD=2;
         else
                 NR_HD=1;
 #endif
+        // 现在开始设置硬盘分区表数组：这里只设置第0项和第5项，对应第一个块硬盘，和第二块硬盘，其他对应硬盘分区的项不做设置
         for (i=0 ; i<NR_HD ; i++) {
-                hd[i*5].start_sect = 0;
+                hd[i*5].start_sect = 0; // 初始扇区为0
                 hd[i*5].nr_sects = hd_info[i].head*
-                        hd_info[i].sect*hd_info[i].cyl;
+                        hd_info[i].sect*hd_info[i].cyl; // 总扇区数量 = 磁头数 * 每柱面（磁道）扇区数 * 柱面数
         }
 
         /*
@@ -166,40 +185,50 @@ int sys_setup(void * BIOS)
 		
         */
 
-        if ((cmos_disks = CMOS_READ(0x12)) & 0xf0)
-                if (cmos_disks & 0x0f)
+        // 检查硬盘到底是不是 AT控制器兼容
+        // 从CMOS偏移地址0x12读出磁盘类型字节：
+        // 1. 如果低半字节值不为0， 则表示有2块“AT兼容”的硬盘
+        // 2. 如果低半字节值为0，表示只有1块“AT兼容”的硬盘
+        // 3. 如果整个字节为0，没有“AT兼容”的硬盘
+        if ((cmos_disks = CMOS_READ(0x12)) & 0xf0) // 整个字节不为0
+                if (cmos_disks & 0x0f) // 低半字节不为0
                         NR_HD = 2;
-                else
-                        NR_HD = 1;
+                else // 低半字节为0
+                        NR_HD = 1; 
         else
                 NR_HD = 0;
+
+        // 根据上面检测结果，重新设置硬盘分区表
         for (i = NR_HD ; i < 2 ; i++) {
                 hd[i*5].start_sect = 0;
                 hd[i*5].nr_sects = 0;
         }
+
+        // 初始化硬盘分区表数组hd中的分区项
         for (drive=0 ; drive<NR_HD ; drive++) {
-                if (!(bh = bread(0x300 + drive*5,0))) {
-                        printk("Unable to read partition table of drive %d\n\r",
-                               drive);
-                        panic("");
+                // 从每块硬盘的“第一个扇区”读出分区表信息到“高速缓冲区”
+                if (!(bh = bread(0x300 + drive*5,0))) { // 0x300, 0x305 分别是第一块硬盘，第二块硬盘的设备号
+                        printk("Unable to read partition table of drive %d\n\r", drive); // 无法读取分区表 
+                        panic(""); // 死机
                 }
+                // 硬盘第一个扇区的结束标志应该是0xAA55 
                 if (bh->b_data[510] != 0x55 || (unsigned char)
-                    bh->b_data[511] != 0xAA) {
-                        printk("Bad partition table on drive %d\n\r",drive);
-                        panic("");
+                    bh->b_data[511] != 0xAA) { // 判断硬盘标志0xAA55
+                        printk("Bad partition table on drive %d\n\r",drive); // 分区表损坏
+                        panic(""); // 死机
                 }
-                p = 0x1BE + (void *)bh->b_data;
+                p = 0x1BE + (void *)bh->b_data; // 分区表位于第一个扇区的 0x1BE 偏移处
                 for (i=1;i<5;i++,p++) {
-                        hd[i+5*drive].start_sect = p->start_sect;
-                        hd[i+5*drive].nr_sects = p->nr_sects;
+                        hd[i+5*drive].start_sect = p->start_sect; // 设置分区的开始扇区
+                        hd[i+5*drive].nr_sects = p->nr_sects; // 设置分区的扇区数
                 }
-                brelse(bh);
+                brelse(bh); // 释放高速缓冲块
         }
         if (NR_HD)
-                printk("Partition table%s ok.\n\r",(NR_HD>1)?"s":"");
-        rd_load();
-        mount_root();
-        return (0);
+                printk("Partition table%s ok.\n\r",(NR_HD>1)?"s":""); // 打印初始化号的分区表
+        rd_load(); // 尝试加载 RAM盘 (blk_dev/ramdisk.c)
+        mount_root(); // 加载根文件系统 (fs/super.c)
+        return (0); // 成功：返回 0
 }
 
 static int controller_ready(void)
@@ -384,10 +413,14 @@ void do_hd_request(void)
                 panic("unknown hd-command");
 }
 
+/**
+ * 硬盘初始化函数：init/main.c的main()中被调用
+ */
 void hd_init(void)
 {
-        blk_dev[MAJOR_NR].request_fn = DEVICE_REQUEST;
-        set_intr_gate(0x2E,&hd_interrupt);
-        outb_p(inb_p(0x21)&0xfb,0x21);
-        outb(inb_p(0xA1)&0xbf,0xA1);
+        blk_dev[MAJOR_NR].request_fn = DEVICE_REQUEST; // 设置“硬盘设备”的“请求项处理”函数指针为 do_hd_request 
+        set_intr_gate(0x2E,&hd_interrupt); // 设置硬盘中断门描述符：硬盘中断信号为46(0x2E), 中断处理函数 hd_interrupt（位于kernel/system_call.s中）
+        // 中断号 0x2E 对应8259A芯片的中断请求号 IRQ14
+        outb_p(inb_p(0x21)&0xfb,0x21); // 复位接联8259A IRQ 2 的屏蔽位，允许从片发出中断请求
+        outb(inb_p(0xA1)&0xbf,0xA1); // 复位从片的 IRQ14 屏蔽位，允许硬盘控制器发出中断请求
 }
