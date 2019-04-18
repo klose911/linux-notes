@@ -1,4 +1,4 @@
-/*
+*
  *  linux/kernel/hd.c
  *
  *  (C) 1991  Linus Torvalds
@@ -231,80 +231,152 @@ int sys_setup(void * BIOS)
         return (0); // 成功：返回 0
 }
 
+/*
+ * 判断并循环等待硬盘控制器就绪
+ *
+ * 返回值：> 0 表示控制器就绪， == 0 表示“等待时间期限”已经超时
+ *
+ * 注意：实际上只需要判断第7位就可以，另外现在PC的处理速度很快，循环的次数应该适当加大
+ * 
+ */
 static int controller_ready(void)
 {
         int retries=10000;
 
+        // 读”主状态端口“HD_STATUS(0x1f7)
+        // 循环检测其中的驱动器就绪位（位6 = 1）是否被置位，并且控制器忙位是否被复位（位7 = 0）
+        // 0xc0 = 0b11000000, 因此 &0xc0 可能的结果有 '0b11000000','0b10000000','0b1000000','0b0'
+        // 其中 0b100000 = 0x40 是满足控制器空闲要求的
         while (--retries && (inb_p(HD_STATUS)&0xc0)!=0x40);
-        return (retries);
+        return (retries); // 循环计数次数
 }
 
+/*
+ * 检查硬盘执行命令后的状态（win是温切斯特硬盘的缩写）
+ *
+ * 返回：0 表示正常，1 表示出错
+ * 
+ * 如果执行命令错误，还需要再读”错误端口“ HD_ERROR(0x1f1)
+ * 
+ */
 static int win_result(void)
 {
-        int i=inb_p(HD_STATUS);
+        int i=inb_p(HD_STATUS); // 读取状态端口
 
+        // 命令执行成功：BUSY_STAT == 0，READY_STAT == 1，WRERR_STAT == 0, SEEK_STAT == 1, ERR_STAT == 0
         if ((i & (BUSY_STAT | READY_STAT | WRERR_STAT | SEEK_STAT | ERR_STAT))
             == (READY_STAT | SEEK_STAT))
                 return(0); /* ok */
-        if (i&1) i=inb(HD_ERROR);
-        return (1);
+        if (i&1) // 若 ERR_STAT（位0 == 1）被置位
+                i=inb(HD_ERROR); // 则读取“错误端口”HD_ERROR
+        return (1); // 表示出错
 }
 
+/*
+ * 向硬盘控制器发送命令块
+ *
+ * drive: 硬盘号 0～1
+ * nsect: 读写扇区数
+ * sect: 起始扇区
+ * head: 磁头号
+ * cyl: 柱面号
+ * cmd: 命令码
+ * intr_addr: 硬盘中断处理程序中将要调用的C函数指针
+ * 
+ * 无返回
+ *
+ * 该函数在硬盘控制器就绪后调用：
+ * 1. 设置 do_hd 为硬盘中断处理程序中将要调用的C函数指针 (read_intr, write_intr)
+ * 2. 发送硬盘控制字节
+ * 3. 发送7字节的参数命令块
+ * 
+ */
 static void hd_out(unsigned int drive,unsigned int nsect,unsigned int sect,
                    unsigned int head,unsigned int cyl,unsigned int cmd,
                    void (*intr_addr)(void))
 {
-        register int port asm("dx");
+        register int port asm("dx"); // 定义局部寄存器变量并存放在寄存器dx中
 
-        if (drive>1 || head>15)
-                panic("Trying to write bad sector");
-        if (!controller_ready())
-                panic("HD controller not ready");
-        do_hd = intr_addr;
-        outb_p(hd_info[drive].ctl,HD_CMD);
-        port=HD_DATA;
-        outb_p(hd_info[drive].wpcom>>2,++port);
-        outb_p(nsect,++port);
-        outb_p(sect,++port);
-        outb_p(cyl,++port);
-        outb_p(cyl>>8,++port);
-        outb_p(0xA0|(drive<<4)|head,++port);
-        outb(cmd,++port);
+        // 检查参数有效性
+        if (drive>1 || head>15) // 硬盘号 > 1 或者 磁头号 > 15 
+                panic("Trying to write bad sector"); // 打印出错信息，死机
+        if (!controller_ready()) // 硬盘状态未就绪
+                panic("HD controller not ready"); // 打印出错信息，死机
+
+        // 硬盘控制器执行完读写命令后会发出一个硬盘中断
+        // 硬盘中断程序由 system_call.s/hd_interrupt来处理
+        // hd_interrupt 又会调用 do_hd 这个C函数指针，所以需要事先设置
+        // 注意：do_hd被声明在blk.h第114行！！！
+        do_hd = intr_addr; // 设置硬盘中断处理程序中将要调用的C函数指针(read_intr, write_intr)
+        // 先向”命令端口“(0x3f6)发送指定硬盘的”控制字节”
+        outb_p(hd_info[drive].ctl,HD_CMD); // 向”磁盘控制命令端口“(HD_CMD)发送”控制字节“(hd_info[drive].ctl)
+        // 依次向“数据端口”(0x1f1~0x1f7)发送7字节的参数命令块
+        port=HD_DATA; // dx寄存器设置为数据端口 0x1f0
+        outb_p(hd_info[drive].wpcom>>2,++port); // 参数：写预补偿柱面号（需除4），0x1f1 
+        outb_p(nsect,++port); // 参数：读/写扇区总数, 0x1f2
+        outb_p(sect,++port); // 参数：起始扇区号, 0x1f3
+        outb_p(cyl,++port); // 参数：柱面号低8位, 0x1f4
+        outb_p(cyl>>8,++port); // 参数：柱面号高8位, 0x1f5
+        outb_p(0xA0|(drive<<4)|head,++port); // 参数：驱动器 + 磁头号, 0x1f6
+        outb(cmd,++port); // 命令：磁盘控制命令, 0x1f7
+        // 磁盘控制器接到这7个字节的命令后：
+        // 1. 执行磁盘操作（比如：把一个扇区的磁盘读入硬盘控制器缓冲区） 
+        // 2. 操作完成后触发硬盘中断
+        // 3. 硬盘中断处理调用do_hd(比如: read_intr 检查执行状态，如果成功把一个扇区的数据从磁盘控制器缓冲区读入到请求项的缓冲块中)
+        // 继续执行下一个扇区的读/写命令 ......
 }
 
+/*
+ * 等待磁盘就绪
+ *
+ * 返回：成功返回 0, 若等待时间超时，仍然忙碌，返回 1
+ */
 static int drive_busy(void)
 {
         unsigned int i;
 
+        // 循环读取主状态端口
         for (i = 0; i < 10000; i++)
-                if (READY_STAT == (inb_p(HD_STATUS) & (BUSY_STAT|READY_STAT)))
-                        break;
+                if (READY_STAT == (inb_p(HD_STATUS) & (BUSY_STAT|READY_STAT))) // READY_STAT 位 == 1 并且 BUSY_STAT == 0
+                        break; // 退出循环
+        
         i = inb(HD_STATUS);
-        i &= BUSY_STAT | READY_STAT | SEEK_STAT;
-        if (i == (READY_STAT | SEEK_STAT))
-                return(0);
-        printk("HD controller times out\n\r");
+        i &= BUSY_STAT | READY_STAT | SEEK_STAT; 
+        if (i == (READY_STAT | SEEK_STAT)) // 仅有 READY_STAT == 1 或 SEEK_STAT = 1 
+                return(0); // 返回 0 表示成功
+        printk("HD controller times out\n\r"); // 等待超时，打印出错，返回 1 表示失败
         return(1);
 }
 
+/*
+ * 重新校正磁盘控制器
+ * 
+ */
 static void reset_controller(void)
 {
         int	i;
 
-        outb(4,HD_CMD);
-        for(i = 0; i < 100; i++) nop();
-        outb(hd_info[0].ctl & 0x0f ,HD_CMD);
-        if (drive_busy())
-                printk("HD-controller still busy\n\r");
-        if ((i = inb(HD_ERROR)) != 1)
-                printk("HD-controller reset failed: %02x\n\r",i);
+        outb(4,HD_CMD); // 向”控制端口“(0x3f6)发送”允许复位“(4)控制字节
+        for(i = 0; i < 100; i++) nop(); // 循环空操作，使得磁盘控制器有时间复位
+        outb(hd_info[0].ctl & 0x0f ,HD_CMD); // 再向”控制端口“(0x3f6)发送”正常控制字节“（&0xf：不禁止重试、重读）
+        // 等待硬盘控制器就绪
+        if (drive_busy()) // 等待就绪超时
+                printk("HD-controller still busy\n\r"); // 打印出错信息
+        // 读取”错误端口“(0x1f1)
+        if ((i = inb(HD_ERROR)) != 1) // 如果其内容 != 1 : 表示复位操作失败 
+                printk("HD-controller reset failed: %02x\n\r",i); // 打印出错信息
 }
 
+/*
+ * 硬盘复位操作
+ * 
+ */
 static void reset_hd(int nr)
 {
-        reset_controller();
+        reset_controller(); // 复位硬盘控制器
+        // 向硬盘控制器发送”建立驱动器参数“(WIN_SPECIFY)命令，中断处理程序中将要调用的C函数指针为'&recal_intr'
         hd_out(nr,hd_info[nr].sect,hd_info[nr].sect,hd_info[nr].head-1,
-               hd_info[nr].cyl,WIN_SPECIFY,&recal_intr);
+               hd_info[nr].cyl,WIN_SPECIFY,&recal_intr); 
 }
 
 void unexpected_hd_interrupt(void)
