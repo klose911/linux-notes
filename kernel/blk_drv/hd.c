@@ -1,4 +1,4 @@
-*
+/*
  *  linux/kernel/hd.c
  *
  *  (C) 1991  Linus Torvalds
