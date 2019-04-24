@@ -138,7 +138,7 @@ void (*DEVICE_INTR)(void) = NULL;
 static void (DEVICE_REQUEST)(void);
 
 /*
- * 释放高速缓冲块
+ * 解锁高速缓冲块
  *
  * bh: 高速缓冲块头指针
  * 
@@ -162,7 +162,7 @@ static inline void end_request(int uptodate)
         DEVICE_OFF(CURRENT->dev); // 关闭当前请求对应的设备
         if (CURRENT->bh) { // 当前请求的"高速缓冲块头指针"不为NULL
                 CURRENT->bh->b_uptodate = uptodate; // 置位“高速缓冲块头指针”的“更新”标志
-                unlock_buffer(CURRENT->bh); // 释放高速缓冲块
+                unlock_buffer(CURRENT->bh); // 解锁高速缓冲块
         }
         if (!uptodate) { // 打印错误信息
                 printk(DEVICE_NAME " I/O error\n\r");

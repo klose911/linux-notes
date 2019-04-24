@@ -87,22 +87,22 @@ static struct hd_struct {
 } hd[5*MAX_HD]={{0,0},};
 
 /*
- * 读端口嵌入宏：数据从端口port读入到buf地址处，总共读nr个字节
+ * 读端口嵌入宏：数据从端口port读入到buf地址处，总共读nr个字
  *
  * port: 端口
  * buf: 缓冲区地址（内核数据段）
- * nr: 字节数
+ * nr: 字数
  * 
  */
 #define port_read(port,buf,nr)                                  \
         __asm__("cld;rep;insw"::"d" (port),"D" (buf),"c" (nr))
 
 /*
- * 写端口嵌入宏：数据从buf地址处写入到端口port处，总共写nr个字节
+ * 写端口嵌入宏：数据从buf地址处写入到端口port处，总共写nr个字
  *
  * port: 端口
  * buf: 缓冲区地址（内核数据段）
- * nr: 字节数
+ * nr: 字数
  * 
  */
 #define port_write(port,buf,nr)                                 \
@@ -379,61 +379,89 @@ static void reset_hd(int nr)
                hd_info[nr].cyl,WIN_SPECIFY,&recal_intr); 
 }
 
+/**
+ * 意外硬盘中断处理
+ *
+ * 如果硬盘中断处理程序hd_interrupt(kernel/system_call.s)中对应的C函数指针为NULL时候，调用本函数
+ * 
+ */
 void unexpected_hd_interrupt(void)
 {
-        printk("Unexpected HD interrupt\n\r");
+        printk("Unexpected HD interrupt\n\r"); // 打印出错信息
 }
 
+/*
+ * 读写硬盘失败处理
+ *
+ */
 static void bad_rw_intr(void)
 {
-        if (++CURRENT->errors >= MAX_ERRORS)
-                end_request(0);
-        if (CURRENT->errors > MAX_ERRORS/2)
-                reset = 1;
+        if (++CURRENT->errors >= MAX_ERRORS) // 读写硬盘出错次数大于等于7 
+                end_request(0); // 结束当前请求项，并唤醒等待该请求的进程
+        if (CURRENT->errors > MAX_ERRORS/2) // 读写硬盘次数大于3
+                reset = 1; // 设置复位标志：要求执行复位硬盘控制器的操作
 }
 
+/*
+ * 读操作中断调用
+ * 
+ */
 static void read_intr(void)
 {
-        if (win_result()) {
-                bad_rw_intr();
-                do_hd_request();
+        if (win_result()) { // 读操作失败：控制器忙，读出错，或命令执行出错
+                bad_rw_intr(); // 执行读写失败处理
+                do_hd_request(); // 请求硬件做相应处理：复位或执行下一个请求项
                 return;
         }
-        port_read(HD_DATA,CURRENT->buffer,256);
-        CURRENT->errors = 0;
-        CURRENT->buffer += 512;
-        CURRENT->sector++;
-        if (--CURRENT->nr_sectors) {
-                do_hd = &read_intr;
+        // 读当前扇区操作成功
+        // 注意：port_read 读取的是256个字，相当于512字节
+        // request->buffer, request->bh->data 这两者是同一个指针，因此下面的读取操作，也会把数据写入到“高速缓冲块”的数据区
+        port_read(HD_DATA,CURRENT->buffer,256); // 从硬盘控制器的“数据端口”读取一个扇区（512字节）到“当前请求项”的“高速缓冲块”的“数据区”
+        CURRENT->errors = 0; // 清空“当前请求项”的错误计数
+        CURRENT->buffer += 512; // 当前请求项的“缓冲区”指针增加512
+        CURRENT->sector++; // “当前请求项”的已读扇区数 + 1 
+        if (--CURRENT->nr_sectors) { // 所需读取的总扇区数 > 0 : 说明还没全部读完
+                do_hd = &read_intr; // 再次设置硬盘中断调用的C函数指针为'read_intr'
                 return;
         }
-        end_request(1);
-        do_hd_request();
+        // 本次请求项的全部扇区已经读完：结束当前请求项的操作（解锁高速缓冲块，唤醒等待高速缓冲块的进程，唤醒等待空闲请求项的进程等）
+        end_request(1); // 置位“当前请求项”中的“高速缓冲块”中的“数据已更新”标志
+        do_hd_request(); // 处理的下一个“硬盘请求项”
 }
 
+/*
+ * 写操作中断调用
+ * 
+ */
 static void write_intr(void)
 {
-        if (win_result()) {
-                bad_rw_intr();
-                do_hd_request();
+        if (win_result()) { // 写操作失败
+                bad_rw_intr(); // 执行读写操作失败处理
+                do_hd_request(); // 请求硬盘做相应处理：重复执行，复位硬盘，或执行一个请求项
                 return;
         }
-        if (--CURRENT->nr_sectors) {
-                CURRENT->sector++;
-                CURRENT->buffer += 512;
-                do_hd = &write_intr;
-                port_write(HD_DATA,CURRENT->buffer,256);
+        // 当前扇区写操作成功
+        if (--CURRENT->nr_sectors) { // 判断是否还有扇区需要写
+                CURRENT->sector++; // 写入扇区总数 + 1 
+                CURRENT->buffer += 512; // “当前请求项”的“缓冲区”指针向后移动512字节 
+                do_hd = &write_intr; // 再次设置硬盘中断调用的C函数指针为'write_intr'
+                port_write(HD_DATA,CURRENT->buffer,256); // 从“当前请求项”的“高速缓冲块”的“数据区”向“硬盘控制器”的“数据端口”写入512字节（256字） 
                 return;
         }
-        end_request(1);
-        do_hd_request();
+        // 本次请求项的全部扇区已经写完：结束当前请求项的操作
+        end_request(1); // 置位“当前请求项”中的“高速缓冲块”中的“数据已更新”标志
+        do_hd_request(); // 处理的下一个“硬盘请求项”
 }
 
+/*
+ * 复位操作的中断处理
+ * 
+ */
 static void recal_intr(void)
 {
-        if (win_result())
-                bad_rw_intr();
-        do_hd_request();
+        if (win_result()) // 复位操作出错
+                bad_rw_intr(); // 执行出错处理
+        do_hd_request(); // 执行硬盘请求项
 }
 
 void do_hd_request(void)

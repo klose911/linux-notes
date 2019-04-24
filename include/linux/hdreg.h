@@ -11,18 +11,18 @@
 #define _HDREG_H
 
 /* Hd controller regs. Ref: IBM AT Bios-listing */
-#define HD_DATA		0x1f0	/* _CTL when writing 数据寄存器 */ 
-#define HD_ERROR	0x1f1	/* see err-bits 错误寄存器 */ 
-#define HD_NSECTOR	0x1f2	/* nr of sectors to read/write 扇区数寄存器 */
-#define HD_SECTOR	0x1f3	/* starting sector 起始扇区寄存器 */
-#define HD_LCYL		0x1f4	/* starting cylinder  柱面号寄存器（低字节）*/
-#define HD_HCYL		0x1f5	/* high byte of starting cyl 柱面号寄存器（高字节） */
-#define HD_CURRENT	0x1f6	/* 101dhhhh , d=drive（驱动器号）, hhhh=head（磁头号） 驱动器/磁头寄存器*/
-#define HD_STATUS	0x1f7	/* see status-bits 读时：主状态寄存器 */
-#define HD_PRECOMP HD_ERROR	/* same io address, read=error, write=precomp 写前补偿寄存器 */
-#define HD_COMMAND HD_STATUS	/* same io address, read=status, write=cmd 写时：命令寄存器 */
+#define HD_DATA		0x1f0	/* _CTL when writing 数据端口 */ 
+#define HD_ERROR	0x1f1	/* see err-bits 错误端口 */ 
+#define HD_NSECTOR	0x1f2	/* nr of sectors to read/write 扇区数端口 */
+#define HD_SECTOR	0x1f3	/* starting sector 起始扇区端口 */
+#define HD_LCYL		0x1f4	/* starting cylinder  柱面号端口（低字节）*/
+#define HD_HCYL		0x1f5	/* high byte of starting cyl 柱面号端口（高字节） */
+#define HD_CURRENT	0x1f6	/* 101dhhhh , d=drive（驱动器号）, hhhh=head（磁头号） 驱动器/磁头端口*/
+#define HD_STATUS	0x1f7	/* see status-bits 读时：主状态端口 */
+#define HD_PRECOMP HD_ERROR	/* same io address, read=error, write=precomp 写前补偿端口 */
+#define HD_COMMAND HD_STATUS	/* same io address, read=status, write=cmd 写时：命令端口 */
 
-#define HD_CMD		0x3f6 // 硬盘控制寄存器：用于步进选择
+#define HD_CMD		0x3f6 // 硬盘控制端口：用于步进选择
 
 /* Bits of HD_STATUS */
 // 状态寄存器各位的定义
