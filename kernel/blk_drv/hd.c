@@ -464,6 +464,10 @@ static void recal_intr(void)
         do_hd_request(); // 执行硬盘请求项
 }
 
+/**
+ * 执行硬盘读写等请求操作
+ * 
+ */
 void do_hd_request(void)
 {
         int i,r = 0;
@@ -471,46 +475,71 @@ void do_hd_request(void)
         unsigned int sec,head,cyl;
         unsigned int nsect;
 
-        INIT_REQUEST;
-        dev = MINOR(CURRENT->dev);
-        block = CURRENT->sector;
-        if (dev >= 5*NR_HD || block+2 > hd[dev].nr_sects) {
-                end_request(0);
-                goto repeat;
+        INIT_REQUEST; // 检查请求项的有效性，见 blk.h 
+        dev = MINOR(CURRENT->dev); // 获取次设备号：对应于各硬盘的文件系统分区号
+        block = CURRENT->sector; // 获取当前请求项的起始扇区号（对应于当前分区的相对值）
+        // 次设备号 >= 10 或 起始扇区号 + 2 > 当前分区的扇区数
+        // 注意：每次要求读写一块数据（1024字节），所以请求的扇区号不能大于最后倒数第二个扇区号！
+        if (dev >= 5*NR_HD || block+2 > hd[dev].nr_sects) { // “次设备号”或“起始扇区号”无效
+                end_request(0); // 结束当前请求项
+                goto repeat; // 跳转到标号repeat处（定义在 INIT_REQUEST 中）
         }
-        block += hd[dev].start_sect;
-        dev /= 5;
+        block += hd[dev].start_sect; // + “分区的起始扇区的绝对值” => 整个硬盘的分区号（绝对值）  
+        dev /= 5; // 此时dev代表硬盘号：0 - 第一块硬盘，1 - 第二块硬盘
+
+        /*
+         * 根据绝对扇区号block和硬盘号dev，计算出“对应磁道中的扇区号”sec, 所在“柱面号”cyl, 和“磁头号”head
+         * hd_info[dev].sect = track_sects : 每磁道扇区数， hd_indo[dev].head = dev_heads：磁盘总磁头数
+         * 这些变量满足公式： block = (cyl * dev_heads + head) * track_sects + sec - 1
+         * 
+         * 反过来可以计算：
+         * block/track_sects ：商是tracks（当前的磁道总数），余数是 sec - 1
+         * tracks/dev_heads : 商是cyl，余数是head
+         * 
+         */
+        
+        // eax: 绝对扇区号block, edx: 扇区号初始为0
+        // divl指令把edx:eax组成的扇区号 / 每个磁道扇区数(hd_info[dev].sect) : 所得整数商值在eax中，余数在edx中
+        // 因此eax是到指定位置的对应总磁道数（所有磁头面），edx是当前磁道上中的扇区号(sec) 
         __asm__("divl %4":"=a" (block),"=d" (sec):"0" (block),"1" (0),
                 "r" (hd_info[dev].sect));
+        
+        // eax: 到指定位置的对应总磁道数, edx:初始为0
+        // divl指令把edx:eax 对应的总磁道数 / 磁盘总磁头数(hd_info[dev].head) : 所得整数商值在eax中，余数在edx中
+        // 因此eax是柱面号(cyl)，edx是磁头号(head) 
         __asm__("divl %4":"=a" (cyl),"=d" (head):"0" (block),"1" (0),
                 "r" (hd_info[dev].head));
-        sec++;
-        nsect = CURRENT->nr_sectors;
-        if (reset) {
-                reset = 0;
-                recalibrate = 1;
-                reset_hd(CURRENT_DEV);
+        sec++; // 当前扇区号 + 1
+        
+        nsect = CURRENT->nr_sectors; // 设置将要读写的扇区总数
+
+        if (reset) { // ”复位磁盘控制器“标志被置位
+                reset = 0; // 清空”复位磁盘控制器“标志
+                recalibrate = 1; // ”重新校正“标志置位
+                reset_hd(CURRENT_DEV); // 向磁盘控制器发送”建立驱动器参数“命令
                 return;
         }
-        if (recalibrate) {
-                recalibrate = 0;
+        if (recalibrate) { // 重新校正标志被置位
+                recalibrate = 0; // 清空”重新校正“标志
                 hd_out(dev,hd_info[CURRENT_DEV].sect,0,0,0,
-                       WIN_RESTORE,&recal_intr);
+                       WIN_RESTORE,&recal_intr); // 向磁盘控制器发送”重新校正“命令：执行寻道操作，让处于任何地方的磁头重新回到0柱面
                 return;
-        }	
-        if (CURRENT->cmd == WRITE) {
-                hd_out(dev,nsect,sec,head,cyl,WIN_WRITE,&write_intr);
+        }
+        // 注意：写命令必须等待磁盘控制器状态值中的DRQ_STAT被置位方可开始数据真正的数据传输。这和读命令不同
+        if (CURRENT->cmd == WRITE) { // 写操作命令
+                hd_out(dev,nsect,sec,head,cyl,WIN_WRITE,&write_intr); // 向控制器发送”写操作“指令
+                // 循环读取状态端口，并判断DRQ_STAT是否置位（置位，表示磁盘控制器已经准备好在主机和数据端口之间传输数据） 
                 for(i=0 ; i<3000 && !(r=inb_p(HD_STATUS)&DRQ_STAT) ; i++)
                         /* nothing */ ;
-                if (!r) {
-                        bad_rw_intr();
-                        goto repeat;
+                if (!r) { // 循环结束，DRQ_STAT依旧没有置位
+                        bad_rw_intr(); // 执行出错处理 
+                        goto repeat; // 跳转到标号repeat处（定义在 INIT_REQUEST 中） 
                 }
-                port_write(HD_DATA,CURRENT->buffer,256);
-        } else if (CURRENT->cmd == READ) {
-                hd_out(dev,nsect,sec,head,cyl,WIN_READ,&read_intr);
+                port_write(HD_DATA,CURRENT->buffer,256); // 向磁盘控制器的数据端口写入一个扇区的数据
+        } else if (CURRENT->cmd == READ) { // 读操作指令
+                hd_out(dev,nsect,sec,head,cyl,WIN_READ,&read_intr); // 向磁盘控制器发送”读操作命令“
         } else
-                panic("unknown hd-command");
+                panic("unknown hd-command"); // 无效指令，打印错误信息，死机
 }
 
 /**
