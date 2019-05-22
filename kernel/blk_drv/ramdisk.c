@@ -104,58 +104,77 @@ long rd_init(long mem_start, int length)
  * In order to do this, the root device is originally set to the
  * floppy, and we later change it to be ram disk.
  */
+
+/*
+ * 如果根文件系统对应的设备是虚拟盘，则尝试加载它
+ * root_device 默认应该是软盘，所以在这里把它改成ramdisk
+ * 
+ */
+
+/**
+ * 尝试把根文件系统加载到虚拟盘中，本函数在内核设置函数hd.c/setup()中被调用
+ *
+ * 无参数
+ *
+ * 无返回值
+ *
+ * 要加载的根文件系统被存储在boot软盘的第256块磁盘块上（1磁盘块=1024字节）
+ * 
+ */
 void rd_load(void)
 {
         struct buffer_head *bh;
         struct super_block	s;
-        int		block = 256;	/* Start at block 256 */
+        int		block = 256;	/* Start at block 256 */ // 根文件系统开始于软盘的第256磁盘块上
         int		i = 1;
         int		nblocks;
         char		*cp;		/* Move pointer */
 	
-        if (!rd_length)
+        if (!rd_length) // ramdisk的长度为0，直接返回
                 return;
         printk("Ram disk: %d bytes, starting at 0x%x\n", rd_length,
                (int) rd_start);
-        if (MAJOR(ROOT_DEV) != 2)
+        if (MAJOR(ROOT_DEV) != 2) // 根文件系统的主设备号应该是2（软盘），直接返回
                 return;
+        // 预读软盘的第256 + 1, 256, 256 + 2 这些磁盘块到高速缓冲区，其中 256 + 1对应的是根文件系统的超级块
         bh = breada(ROOT_DEV,block+1,block,block+2,-1);
-        if (!bh) {
+        if (!bh) { // 预读根文件系统的超级块失败，打印错误，返回
                 printk("Disk error while looking for ramdisk!\n");
                 return;
         }
-        *((struct d_super_block *) &s) = *((struct d_super_block *) bh->b_data);
-        brelse(bh);
-        if (s.s_magic != SUPER_MAGIC)
+        *((struct d_super_block *) &s) = *((struct d_super_block *) bh->b_data); // 把根文件系统的超级块复制到变量s指向的内存中
+        brelse(bh); // 释放高速缓冲块
+        if (s.s_magic != SUPER_MAGIC) // 读入的文件魔数不是超级块的魔数，超级块读取无效，返回
                 /* No ram disk image present, assume normal floppy boot */
                 return;
-        nblocks = s.s_nzones << s.s_log_zone_size;
-        if (nblocks > (rd_length >> BLOCK_SIZE_BITS)) {
+        nblocks = s.s_nzones << s.s_log_zone_size; // 计算根文件系统的总数据块的个数（具体逻辑见文件系统部分）
+        if (nblocks > (rd_length >> BLOCK_SIZE_BITS)) { // 根文件系统的数据太大，ramdisk无法容纳，打印错误，返回
                 printk("Ram disk image too big!  (%d blocks, %d avail)\n", 
                        nblocks, rd_length >> BLOCK_SIZE_BITS);
                 return;
         }
         printk("Loading %d bytes into ram disk... 0000k", 
-               nblocks << BLOCK_SIZE_BITS);
-        cp = rd_start;
-        while (nblocks) {
-                if (nblocks > 2) 
-                        bh = breada(ROOT_DEV, block, block+1, block+2, -1);
+               nblocks << BLOCK_SIZE_BITS); // 调试信息
+        cp = rd_start; // cp指向ramdisk开始的地方
+        // 循环拷贝根文件到ramdisk
+        while (nblocks) { 
+                if (nblocks > 2) // 要读的数据块数大于2：可以支持预读 
+                        bh = breada(ROOT_DEV, block, block+1, block+2, -1); // 预读对应的block, block + 1, block + 2 到高速缓冲区中
                 else
-                        bh = bread(ROOT_DEV, block);
-                if (!bh) {
+                        bh = bread(ROOT_DEV, block); // 单块读取block块到高速缓冲区中
+                if (!bh) { // 读取失败，打印错误信息，返回
                         printk("I/O error on block %d, aborting load\n", 
                                block);
                         return;
                 }
-                (void) memcpy(cp, bh->b_data, BLOCK_SIZE);
-                brelse(bh);
-                printk("\010\010\010\010\010%4dk",i);
-                cp += BLOCK_SIZE;
-                block++;
-                nblocks--;
-                i++;
+                (void) memcpy(cp, bh->b_data, BLOCK_SIZE); // 从高速缓冲块拷贝到ramdisk区
+                brelse(bh); // 释放高速缓冲块
+                printk("\010\010\010\010\010%4dk",i); // 打印读取的数据块编号
+                cp += BLOCK_SIZE; // cp指针向后增加1024（每块数据块是1024字节）
+                block++; // 软盘要读取的数据块数字 + 1 
+                nblocks--; // 总共要读取的数据块个数 - 1 
+                i++; // 下一个要读取的块编号 + 1 
         }
-        printk("\010\010\010\010\010done \n");
-        ROOT_DEV=0x0101;
+        printk("\010\010\010\010\010done \n"); // 打印“已经成功加载根文件系统”
+        ROOT_DEV=0x0101; // 根文件系统的设备号修改成0x101
 }
