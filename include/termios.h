@@ -1,56 +1,114 @@
 #ifndef _TERMIOS_H
 #define _TERMIOS_H
 
-#define TTY_BUF_SIZE 1024
+#define TTY_BUF_SIZE 1024 // tty中的缓冲区长度
 
 /* 0x54 is just a magic number to make these relatively uniqe ('T') */
+/*0x54只是一个魔数，目的是使下面这些常数唯一*/
 
+/**
+ * TC开头的表示：tty 设备的ioctl调用中的cmd常数，ioctl把命令编码在低位字中
+ *
+ */
+// 取相应终端的terminos结构中的信息
 #define TCGETS		0x5401
+// 设置相应终端terminos结构中的信息
 #define TCSETS		0x5402
+// 设置terminos结构中的信息之前，需要先等待输出队列中的数据处理完毕
 #define TCSETSW		0x5403
+// 设置terminos结构中的信息之前，需要先等待输出队列中的数据处理完毕，并且刷新（清空）输入队列
 #define TCSETSF		0x5404
+// 取相应终端termio结构中的信息
 #define TCGETA		0x5405
+// 设置相应终端termio结构中的信息
 #define TCSETA		0x5406
+// 设置termio结构中的信息之前，需要先等待输出队列中的数据处理完毕
 #define TCSETAW		0x5407
+// 设置termio结构中的信息之前，需要先等待输出队列中的数据处理完毕，并且刷新（清空）输入队列
 #define TCSETAF		0x5408
+// 等待输出队列数据处理完毕，若参数值是0,则发送一个break
 #define TCSBRK		0x5409
+// 开始/停止控制：如果参数是0,则挂起输出，如果参数是1,则重新开启挂起的输出，如果是2,则挂起输入，如果是3,则重启开启挂起的输入
 #define TCXONC		0x540A
+// 刷新已写输出但还没发送或已收但还没有读的数据。如果参数是0,则刷新输入队列,如果参数是1,则刷新输出队列，如果参数是2,则刷新输入和输出队列
 #define TCFLSH		0x540B
+
+/**
+ * TIO 开头的表示：tty输入输出控制命令
+ * 
+ */
+// 设置终端串行线路专用模式
 #define TIOCEXCL	0x540C
+// 复位终端串行线路专用模式
 #define TIOCNXCL	0x540D
+// 设置tty为控制终端
 #define TIOCSCTTY	0x540E
+// 读取指定终端设备的进程组ID
 #define TIOCGPGRP	0x540F
+// 设置指定终端设备的进程组ID
 #define TIOCSPGRP	0x5410
+// 返回输出队列还没送出的字符数
 #define TIOCOUTQ	0x5411
+// 模拟终端输入：该命令以一个指向字符的指针作为参数，并假装该字符是在终端键入的。用户必须在该控制终端上具有超级用户权限或具有读权限
 #define TIOCSTI		0x5412
+// 读取终端设备窗口大小
 #define TIOCGWINSZ	0x5413
+// 设置终端设备窗口大小
 #define TIOCSWINSZ	0x5414
+// 返回modem状态控制引线的当前状态比特位标志集
 #define TIOCMGET	0x5415
+// 设置单个modem状态控制引线的状态（true或false）
 #define TIOCMBIS	0x5416
+// 复位单个modem状态控制引线的状态
 #define TIOCMBIC	0x5417
+// 设置modem状态控制引线的当前状态比特位标志集。如果某一比特位被置位，则modem对应的状态引线将会设置为有效
 #define TIOCMSET	0x5418
+// 读取软件载波检测标志（1：开启，0：关闭）
+// 对于本地连接的终端设备，软件载波标志是开启的，对于使用modem线路的终端设备，软件载波标志是关闭的
+// 为了能使用这两个ioctl调用，tty线路应该以O_NDELAY方式打开，这样open()就不会等待载波
 #define TIOCGSOFTCAR	0x5419
+// 设置软件载波检测标志
 #define TIOCSSOFTCAR	0x541A
+// 返回输入队列中还未取走的字符
 #define TIOCINQ		0x541B
 
+/**
+ * 窗口大小属性结构
+ * 
+ * 在图形界面环境下可用于基于屏幕的应用程序
+ * 
+ */
 struct winsize {
-	unsigned short ws_row;
-	unsigned short ws_col;
-	unsigned short ws_xpixel;
-	unsigned short ws_ypixel;
+        unsigned short ws_row; // 窗口字符行数
+        unsigned short ws_col; // 窗口字符列数
+        unsigned short ws_xpixel; // 窗口宽度（像素值）
+        unsigned short ws_ypixel; // 窗口高度（像素值）
 };
 
-#define NCC 8
+
+#define NCC 8 // termio结构中的控制字符数组的长度
+
+/**
+ * AT&T系统V的termio结构
+ * 
+ */
 struct termio {
-	unsigned short c_iflag;		/* input mode flags */
-	unsigned short c_oflag;		/* output mode flags */
-	unsigned short c_cflag;		/* control mode flags */
-	unsigned short c_lflag;		/* local mode flags */
-	unsigned char c_line;		/* line discipline */
-	unsigned char c_cc[NCC];	/* control characters */
+        unsigned short c_iflag;		/* input mode flags */ // 输入模式标志
+        unsigned short c_oflag;		/* output mode flags */ // 输出模式标志
+        unsigned short c_cflag;		/* control mode flags */ // 控制模式标志
+        unsigned short c_lflag;		/* local mode flags */ // 本地模式标志
+        unsigned char c_line;		/* line discipline */ // 线路规程（速率） 
+        unsigned char c_cc[NCC];	/* control characters */ // 控制字符数组
 };
 
-#define NCCS 17
+#define NCCS 17 // terminos结构中的控制字符数组的长度
+
+/**
+ * POSIX中的terminos结构
+ * 
+ * 此结构和termio完全类似，只是控制字符数组的长度不同
+ * 
+ */
 struct termios {
 	unsigned long c_iflag;		/* input mode flags */
 	unsigned long c_oflag;		/* output mode flags */
