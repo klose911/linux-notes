@@ -110,164 +110,207 @@ struct termio {
  * 
  */
 struct termios {
-	unsigned long c_iflag;		/* input mode flags */
-	unsigned long c_oflag;		/* output mode flags */
-	unsigned long c_cflag;		/* control mode flags */
-	unsigned long c_lflag;		/* local mode flags */
-	unsigned char c_line;		/* line discipline */
-	unsigned char c_cc[NCCS];	/* control characters */
+        unsigned long c_iflag;		/* input mode flags */
+        unsigned long c_oflag;		/* output mode flags */
+        unsigned long c_cflag;		/* control mode flags */
+        unsigned long c_lflag;		/* local mode flags */
+        unsigned char c_line;		/* line discipline */
+        unsigned char c_cc[NCCS];	/* control characters */
 };
 
 /* c_cc characters */
-#define VINTR 0
-#define VQUIT 1
-#define VERASE 2
-#define VKILL 3
-#define VEOF 4
-#define VTIME 5
-#define VMIN 6
-#define VSWTC 7
-#define VSTART 8
-#define VSTOP 9
-#define VSUSP 10
-#define VEOL 11
-#define VREPRINT 12
-#define VDISCARD 13
-#define VWERASE 14
-#define VLNEXT 15
-#define VEOL2 16
+
+/**
+ * 控制字符数组c_cc[]项的下标值
+ * 
+ */
+#define VINTR 0 // INTR (^C) \003 中断字符
+#define VQUIT 1 // QUIT (^\) \034 退出字符 
+#define VERASE 2 // ERASE (^H) \177 擦除字符
+#define VKILL 3 // KILL (^U) \025 终止字符（删除行） 
+#define VEOF 4 // EOF (^D) \004 文件结束字符
+#define VTIME 5 // TIME (\0) \0 定时器值
+#define VMIN 6 // MIN (\1) \1 定时器值
+#define VSWTC 7 // SWTC (\0) \0 交换字符
+#define VSTART 8 // START (^Q) \021 开始字符
+#define VSTOP 9 // STOP (^S) \023 停止字符
+#define VSUSP 10 // SUSP (^Z) \034 挂起字符
+#define VEOL 11 // EOL (\0) \0 行结束字符
+#define VREPRINT 12 // REPRINT (^R) \022 重显示字符
+#define VDISCARD 13 // DISCARD (^O) \017 丢弃字符
+#define VWERASE 14 // WERASE (^W) \027 单词擦除字符
+#define VLNEXT 15// LNEXT (^V) \026 下一行字符
+#define VEOL2 16 // EOL2 (\0) \0 行结束字符2 
 
 /* c_iflag bits */
-#define IGNBRK	0000001
-#define BRKINT	0000002
-#define IGNPAR	0000004
-#define PARMRK	0000010
-#define INPCK	0000020
-#define ISTRIP	0000040
-#define INLCR	0000100
-#define IGNCR	0000200
-#define ICRNL	0000400
-#define IUCLC	0001000
-#define IXON	0002000
-#define IXANY	0004000
-#define IXOFF	0010000
-#define IMAXBEL	0020000
+
+/**
+ * c_iflag输入模式标志的比特位
+ * 
+ */
+#define IGNBRK	0000001 // 输入时忽略BREAK条件
+#define BRKINT	0000002 // BREAK发生时产生SIGINT信号
+#define IGNPAR	0000004 // 忽略奇偶校验出错的字符
+#define PARMRK	0000010 // 标记奇偶校验出错
+#define INPCK	0000020 // 允许奇偶校验
+#define ISTRIP	0000040 // 屏蔽字符第8位
+#define INLCR	0000100 // 输入时将换行符NL映射成回车符CR
+#define IGNCR	0000200 // 忽略回车符CR
+#define ICRNL	0000400 // 输入时将回车符CR映射成换行符NL
+#define IUCLC	0001000 // 输入时将大写字符转换成小写字符
+#define IXON	0002000 // 允许开始/停止(XON/XOFF)的输出控制
+#define IXANY	0004000 // 允许任何字符重启输出
+#define IXOFF	0010000 // 允许开始/停止(XON/XOFF)的输入控制
+#define IMAXBEL	0020000 // 输入队列满时响铃
 
 /* c_oflag bits */
-#define OPOST	0000001
-#define OLCUC	0000002
-#define ONLCR	0000004
-#define OCRNL	0000010
-#define ONOCR	0000020
-#define ONLRET	0000040
-#define OFILL	0000100
-#define OFDEL	0000200
-#define NLDLY	0000400
-#define   NL0	0000000
-#define   NL1	0000400
-#define CRDLY	0003000
-#define   CR0	0000000
-#define   CR1	0001000
-#define   CR2	0002000
-#define   CR3	0003000
-#define TABDLY	0014000
-#define   TAB0	0000000
-#define   TAB1	0004000
-#define   TAB2	0010000
-#define   TAB3	0014000
-#define   XTABS	0014000
-#define BSDLY	0020000
-#define   BS0	0000000
-#define   BS1	0020000
-#define VTDLY	0040000
-#define   VT0	0000000
-#define   VT1	0040000
-#define FFDLY	0040000
-#define   FF0	0000000
-#define   FF1	0040000
+
+/**
+ * c_oflag输出模式标志的比特位
+ * 
+ */
+#define OPOST	0000001 // 执行输出处理
+#define OLCUC	0000002 // 输出时将小写字符转换成大写字符
+#define ONLCR	0000004 // 输出时将换行符NL映射成回车符CR
+#define OCRNL	0000010 // 输出时将回车符CR映射成换行符NL
+#define ONOCR	0000020 // 在0列不输出回车符CR
+#define ONLRET	0000040 // 换行符CR执行回车符的功能
+#define OFILL	0000100 // 延迟时使用填充字符而不是时间延迟
+#define OFDEL	0000200 // 填充字符是ASCII码DEL，如果未设置，则使用ASCII码的NULL
+#define NLDLY	0000400 // 选择换行延迟
+#define   NL0	0000000 // 换行延迟类型0
+#define   NL1	0000400 // 换行延迟类型1
+#define CRDLY	0003000 // 选择回车延迟
+#define   CR0	0000000 // 回车延迟类型0
+#define   CR1	0001000 // 回车延迟类型1 
+#define   CR2	0002000 // 回车延迟类型2
+#define   CR3	0003000 // 回车延迟类型3
+#define TABDLY	0014000 // 选择水平制表(TAB)延迟
+#define   TAB0	0000000 // TAB延迟类型0
+#define   TAB1	0004000 // TAB延迟类型1
+#define   TAB2	0010000 // TAB延迟类型2
+#define   TAB3	0014000 // TAB延迟类型3
+#define   XTABS	0014000 // 将TAB转换成空格，该值表示空格数
+#define BSDLY	0020000 // 选择BACKSPACE延迟
+#define   BS0	0000000 // BACKSPACE延迟类型0 
+#define   BS1	0020000 // BACKSPACE延迟类型1 
+#define VTDLY	0040000 // 选择纵向制表(VT)延迟
+#define   VT0	0000000 // VT延迟类型0
+#define   VT1	0040000 // VT延迟类型1 
+#define FFDLY	0040000 // 选择换页(FF)延迟
+#define   FF0	0000000 // FF延迟类型0
+#define   FF1	0040000 // FF延迟类型1 
 
 /* c_cflag bit meaning */
-#define CBAUD	0000017
-#define  B0	0000000		/* hang up */
-#define  B50	0000001
-#define  B75	0000002
-#define  B110	0000003
-#define  B134	0000004
-#define  B150	0000005
-#define  B200	0000006
-#define  B300	0000007
-#define  B600	0000010
-#define  B1200	0000011
-#define  B1800	0000012
-#define  B2400	0000013
-#define  B4800	0000014
-#define  B9600	0000015
-#define  B19200	0000016
-#define  B38400	0000017
-#define EXTA B19200
-#define EXTB B38400
-#define CSIZE	0000060
-#define   CS5	0000000
-#define   CS6	0000020
-#define   CS7	0000040
-#define   CS8	0000060
-#define CSTOPB	0000100
-#define CREAD	0000200
-#define CPARENB	0000400
-#define CPARODD	0001000
-#define HUPCL	0002000
-#define CLOCAL	0004000
-#define CIBAUD	03600000		/* input baud rate (not used) */
-#define CRTSCTS	020000000000		/* flow control */
+
+/**
+ * c_cflag控制模式标志的符号常数
+ * 
+ */
+#define CBAUD	0000017 // 传输速率位的屏蔽码
+#define  B0	0000000		/* hang up */ // 挂断线路
+#define  B50	0000001 // 波特率50
+#define  B75	0000002 // 波特率75
+#define  B110	0000003 // 波特率110
+#define  B134	0000004 // 波特率134
+#define  B150	0000005 // 波特率150
+#define  B200	0000006 // 波特率200
+#define  B300	0000007 // 波特率300
+#define  B600	0000010 // 波特率600
+#define  B1200	0000011 // 波特率1200
+#define  B1800	0000012 // 波特率1800
+#define  B2400	0000013 // 波特率2400
+#define  B4800	0000014 // 波特率4800
+#define  B9600	0000015 // 波特率9600
+#define  B19200	0000016 // 波特率19200
+#define  B38400	0000017 // 波特率38400
+#define EXTA B19200 // 扩展波特率A
+#define EXTB B38400 // 扩展波特率B
+#define CSIZE	0000060 // 字符位宽度屏蔽码
+#define   CS5	0000000 // 每字符5位
+#define   CS6	0000020 // 每字符6位
+#define   CS7	0000040 // 每字符7位
+#define   CS8	0000060 // 每字符8位
+#define CSTOPB	0000100 // 设置2个停止位，而不是1个
+#define CREAD	0000200 // 允许接收
+#define CPARENB	0000400 // 开启输出时产生奇偶位，输入时进行奇偶校验
+#define CPARODD	0001000 // 输入/输出校验是奇校验
+#define HUPCL	0002000 // 最后进程关闭时挂断
+#define CLOCAL	0004000 // 忽略调制解调器(modem)控制线路
+#define CIBAUD	03600000		/* input baud rate (not used) */ //输入波特率（未使用）
+#define CRTSCTS	020000000000		/* flow control */ // 流控制
 
 #define PARENB CPARENB
 #define PARODD CPARODD
 
 /* c_lflag bits */
-#define ISIG	0000001
-#define ICANON	0000002
-#define XCASE	0000004
-#define ECHO	0000010
-#define ECHOE	0000020
-#define ECHOK	0000040
-#define ECHONL	0000100
-#define NOFLSH	0000200
-#define TOSTOP	0000400
-#define ECHOCTL	0001000
-#define ECHOPRT	0002000
-#define ECHOKE	0004000
-#define FLUSHO	0010000
-#define PENDIN	0040000
-#define IEXTEN	0100000
+
+/**
+ * c_lflag本地模式标志的符号常数
+ * 
+ */
+#define ISIG	0000001 // 当收到INTR，QUIT，SUSP或DSUSP时候产生相应的信号
+#define ICANON	0000002 // 开启规范模式（熟模式）
+#define XCASE	0000004 // 如果设置了ICANON，则终端是大写字符的
+#define ECHO	0000010 // 回显输入字符
+#define ECHOE	0000020 // 如果设置了ICANON，则ERASE/WERASE将擦除前一个字符/单词
+#define ECHOK	0000040 // 如果设置了ICANON，则KILL字符将擦除当前行
+#define ECHONL	0000100 // 如果设置了ICANON，则即使ECHO没有开启，也回显NL字符
+#define NOFLSH	0000200 // 当生成SIGINT和SIGQUIT时不刷新输入输出队列，当生成SIGSUSP信号时，刷新输入队列
+#define TOSTOP	0000400 // 后台进程试图写自己的控制终端，发送SIGTTOU信号到后台进程的进程组，
+#define ECHOCTL	0001000 // 如果设置了ECHO，则除TAB，NL，START和STOP以外的ASCII控制信号将被回显成^X式样，X值是控制符+0x40
+#define ECHOPRT	0002000 // 如果设置了ICANON和ECHO，字符在被擦除时将被显示
+#define ECHOKE	0004000 // 如果设置了ICANON，则通过KILL擦除的行上的所有字符将被显示
+#define FLUSHO	0010000 // 输出被刷新。通过键入DISCARD字符，该标志被翻转
+#define PENDIN	0040000 // 当下一个字符是读时，输入队列的所有字符将被重显
+#define IEXTEN	0100000 // 开始实现时定义的输入处理
 
 /* modem lines */
-#define TIOCM_LE	0x001
-#define TIOCM_DTR	0x002
-#define TIOCM_RTS	0x004
-#define TIOCM_ST	0x008
-#define TIOCM_SR	0x010
-#define TIOCM_CTS	0x020
-#define TIOCM_CAR	0x040
-#define TIOCM_RNG	0x080
-#define TIOCM_DSR	0x100
-#define TIOCM_CD	TIOCM_CAR
+
+/**
+ * modem 线路信号符号常数
+ * 
+ */
+#define TIOCM_LE	0x001 // 线路允许
+#define TIOCM_DTR	0x002 // 数据终端就绪
+#define TIOCM_RTS	0x004 // 请求发送
+#define TIOCM_ST	0x008 // 串行数据发送
+#define TIOCM_SR	0x010 // 串行数据接收
+#define TIOCM_CTS	0x020 // 清除发送
+#define TIOCM_CAR	0x040 // 载波监测
+#define TIOCM_RNG	0x080 // 响铃指示
+#define TIOCM_DSR	0x100 // 数据设备就绪
+#define TIOCM_CD	TIOCM_CAR 
 #define TIOCM_RI	TIOCM_RNG
 
 /* tcflow() and TCXONC use these */
-#define	TCOOFF		0
-#define	TCOON		1
-#define	TCIOFF		2
-#define	TCION		3
+
+/**
+ * tcflow() 和 TCXONC 使用的常数
+ */
+#define	TCOOFF		0 // 挂起输出
+#define	TCOON		1 // 重启被挂起的输出
+#define	TCIOFF		2 // 系统传输一个STOP字符，使设备停止向系统传输数据
+#define	TCION		3 // 系统传输一个START字符，使设备开始向系统传输输出
 
 /* tcflush() and TCFLSH use these */
-#define	TCIFLUSH	0
-#define	TCOFLUSH	1
-#define	TCIOFLUSH	2
+
+/**
+ * tcflush() 和 TCFLSH 使用的常数
+ * 
+ */
+#define	TCIFLUSH	0 // 清接收到的数据但不读
+#define	TCOFLUSH	1 // 清已写的数据但不传送
+#define	TCIOFLUSH	2 // 清接收到的数据但不读，清已写的数据但不传送
 
 /* tcsetattr uses these */
-#define	TCSANOW		0
-#define	TCSADRAIN	1
-#define	TCSAFLUSH	2
+
+/**
+ * tcsetattr() 使用的常数
+ */
+#define	TCSANOW		0 // 改变立即发生
+#define	TCSADRAIN	1 // 改变在所有已写的输出被传输之后发生
+#define	TCSAFLUSH	2 // 改变在所有已写的输出被传输之后发生，并且在所有接收到但还没有读的数据被丢弃之后发生
 
 typedef int speed_t;
 
@@ -281,6 +324,6 @@ extern int tcflush(int fildes, int queue_selector);
 extern int tcgetattr(int fildes, struct termios *termios_p);
 extern int tcsendbreak(int fildes, int duration);
 extern int tcsetattr(int fildes, int optional_actions,
-	struct termios *termios_p);
+                     struct termios *termios_p);
 
 #endif
