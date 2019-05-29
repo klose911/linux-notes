@@ -73,23 +73,23 @@ e0:	.byte 0
 	 * 
 	 */
 keyboard_interrupt:
-	pushl %eax // eax, ebx, ecx, edx寄存器 压栈
+	pushl %eax # eax, ebx, ecx, edx寄存器压栈
 	pushl %ebx
 	pushl %ecx
 	pushl %edx
-	push %ds // ds, es 寄存器压栈
+	push %ds # ds, es 寄存器压栈
 	push %es
-	movl $0x10,%eax // eax = 0x10 
-	mov %ax,%ds // es, ds 都设置为0x10，也就是内核数据段
+	movl $0x10,%eax # eax=0x10 
+	mov %ax,%ds # es, ds 都设置为0x10，也就是内核数据段
 	mov %ax,%es
-	xor %al,%al	//清空al	/* %eax is scan code */ 
-	inb $0x60,%al // 从端口0x60读取扫描码到al寄存器
-	cmpb $0xe0,%al // 比较al和0xe0是否相等
-	je set_e0 // 如果相同，则跳转到set_e0标号处的代码
-	cmpb $0xe1,%al // 比较al和0xe0是否相等
-	je set_e1 // 如果相同，则跳转到set_e1标号处的代码
-	call key_table(,%eax,4) // 调用键盘处理程序表key_table + eax*4处的子程序
-	movb $0,e0 // 调用之后e0标志复位
+	xor %al,%al	# 清空al	/* %eax is scan code */ 
+	inb $0x60,%al # 从端口0x60读取扫描码到al寄存器
+	cmpb $0xe0,%al # 比较al和0xe0是否相等
+	je set_e0 # 如果相同，则跳转到set_e0标号处的代码
+	cmpb $0xe1,%al # 比较al和0xe0是否相等
+	je set_e1 # 如果相同，则跳转到set_e1标号处的代码
+	call key_table(,%eax,4) # 调用键盘处理程序表key_table + eax*4处的子程序
+	movb $0,e0 # 调用之后e0标志复位
 	/*
 	 * 下面这段代码针对使用8255A的PC标准键盘电路进行硬件复位处理
 	 * 
