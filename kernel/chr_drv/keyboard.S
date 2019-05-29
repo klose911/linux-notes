@@ -14,23 +14,23 @@
 
 .text
 
-// 声明keyboard_interrupt函数，初始化时设置键盘中断描述符
+# 声明keyboard_interrupt函数，初始化时设置键盘中断描述符
 .globl keyboard_interrupt 
 
 /*
  * these are for the keyboard read functions
 	*/
 
-// tty_queue队列缓存长度
+# tty_queue队列缓存长度
 size	= 1024		/* must be a power of two ! And MUST be the same
 			   as in tty_io.c !!!! */
-// tty_queue的head域在tty_queue结构中的偏移
+# tty_queue的head域在tty_queue结构中的偏移
 head = 4
-// tty_queue的tail域在tty_queue结构中的偏移	
+# tty_queue的tail域在tty_queue结构中的偏移	
 tail = 8
-// tty_queue的proc_list域在tty_queue结构中的偏移	
+# tty_queue的proc_list域在tty_queue结构中的偏移	
 proc_list = 12
-// tty_queue的buf域在tty_queue结构中的偏移	
+# tty_queue的buf域在tty_queue结构中的偏移	
 buf = 16
 
 	/*
@@ -97,33 +97,33 @@ keyboard_interrupt:
 	 * 2. 立刻重新允许键盘
 	 * 
 	 */
-e0_e1:	inb $0x61,%al // 读取0x61端口到al，端口0x61是8255A的输出端口B的地址，该输出端口的第7位(PB7)用于禁止和允许对键盘数据的处理
-	jmp 1f // 延迟一会
+e0_e1:	inb $0x61,%al # 读取0x61端口到al，端口0x61是8255A的输出端口B的地址，该输出端口的第7位(PB7)用于禁止和允许对键盘数据的处理
+	jmp 1f # 延迟一会
 1:	jmp 1f
-1:	orb $0x80,%al // a1的第7位置位（禁止键盘工作） 
-	jmp 1f // 延迟一会
+1:	orb $0x80,%al # a1的第7位置位（禁止键盘工作） 
+	jmp 1f # 延迟一会
 1:	jmp 1f
-1:	outb %al,$0x61 // PPI PB7置位
-	jmp 1f // 延迟一会
+1:	outb %al,$0x61 # PPI PB7置位
+	jmp 1f # 延迟一会
 1:	jmp 1f 
-1:	andb $0x7F,%al // a1的第7位复位（允许键盘工作）
+1:	andb $0x7F,%al # a1的第7位复位（允许键盘工作）
 	outb %al,$0x61
-	movb $0x20,%al // PPI PB7复位
-	outb %al,$0x20 // 向8259中断芯片发送EOI（中断结束）信号
-	pushl $0 // 控制台号 tty=0作为参数入栈
-	call do_tty_interrupt // 调用do_tty_interrupt函数（具体功能见tty_io.c中代码） 
-	addl $4,%esp // 丢弃刚才入栈的参数
-	pop %es // 弹出开始入栈的es，ds寄存器
+	movb $0x20,%al # PPI PB7复位
+	outb %al,$0x20 # 向8259中断芯片发送EOI（中断结束）信号
+	pushl $0 # 控制台号 tty=0作为参数入栈
+	call do_tty_interrupt # 调用do_tty_interrupt函数（具体功能见tty_io.c中代码） 
+	addl $4,%esp # 丢弃刚才入栈的参数
+	pop %es # 弹出开始入栈的es，ds寄存器
 	pop %ds 
-	popl %edx // 依次恢复开始入栈的edx, ecx, ebx, eax寄存器的值
+	popl %edx # 依次恢复开始入栈的edx, ecx, ebx, eax寄存器的值
 	popl %ecx
 	popl %ebx
 	popl %eax
-	iret // 键盘中断处理返回
-set_e0:	movb $1,e0 // 设置e0标志位为1
-	jmp e0_e1 // 跳转到e0_e1标记处代码
-set_e1:	movb $2,e0 // 设置e0标志位为2
-	jmp e0_e1 // 跳转到e0_e1标记处代码
+	iret # 键盘中断处理返回
+set_e0:	movb $1,e0 # 设置e0标志位为1
+	jmp e0_e1 # 跳转到e0_e1标记处代码
+set_e1:	movb $2,e0 # 设置e0标志位为2
+	jmp e0_e1 # 跳转到e0_e1标记处代码
 
 /*
  * This routine fills the buffer with max 8 bytes, taken from
@@ -136,29 +136,29 @@ set_e1:	movb $2,e0 // 设置e0标志位为2
 	 * 
 	 */
 put_queue:
-	pushl %ecx // ecx, edx依次入栈 
+	pushl %ecx # ecx, edx依次入栈 
 	pushl %edx
-	// 把table_list变量地址处的值（实际上是&tty_table[0].read_q， 也就是“控制台”读队列的地址）放入到edx寄存器
+	# 把table_list变量地址处的值（实际上是&tty_table[0].read_q， 也就是“控制台”读队列的地址）放入到edx寄存器
 	movl table_list,%edx		# read-queue for console 
-	movl head(%edx),%ecx // 把控制台read_q结构里的head指针值放入到 ecx 
-1:	movb %al,buf(%edx,%ecx) // 将al寄存器的值放入到read_q->buf[read_q->head]处
-	incl %ecx // ecx + 1 
-	andl $size-1,%ecx // 调整ecx的值，如果溢出，则回到开始处(0x0111111111 & 0x1000000000 = 0)  
-	cmpl tail(%edx),%ecx		# buffer full - discard everything // 比较tail指针值和exc寄存器中的值是否一样
-	je 3f // 一样，表示缓冲区已经满了，则跳转标号3处的代码：丢弃所有的扫描码
-	shrdl $8,%ebx,%eax // 将ebx中的8个字符右移8位到eax中，ebx保持不变
-	je 2f // ebx和eax是否一样，如果一样表示已经没有多余的字符了，跳转到标号2处的代码
-	shrl $8,%ebx // ebx右移8位
-	jmp 1b // 跳转到标号1，继续操作（总共可能最多会有8次读取al的操作）
-2:	movl %ecx,head(%edx) // ecx寄存器中的值写入到read_q的head域 
-	movl proc_list(%edx),%ecx // ecx 设置为read_q -> proc_list 
-	testl %ecx,%ecx // ecx是否为0,
-	je 3f //如果为0(NULL),表示没有等待该控制台的进程，直接跳转到标号3处
-	// 注意：每个进程的第一个字段就是进程状态，因此这里可以用 (%ecx) 表示进程的状态字段
-	movl $0,(%ecx) // 唤醒该等待的进程（直接置改进成的状态为0：就绪状态）
-3:	popl %edx // 依次恢复入栈的edx,ecx的值
+	movl head(%edx),%ecx # 把控制台read_q结构里的head指针值放入到 ecx 
+1:	movb %al,buf(%edx,%ecx) # 将al寄存器的值放入到read_q->buf[read_q->head]处
+	incl %ecx # ecx + 1 
+	andl $size-1,%ecx # 调整ecx的值，如果溢出，则回到开始处(0x0111111111 & 0x1000000000 = 0)  
+	cmpl tail(%edx),%ecx		# buffer full - discard everything # 比较tail指针值和exc寄存器中的值是否一样
+	je 3f # 一样，表示缓冲区已经满了，则跳转标号3处的代码：丢弃所有的扫描码
+	shrdl $8,%ebx,%eax # 将ebx中的8个字符右移8位到eax中，ebx保持不变
+	je 2f # ebx和eax是否一样，如果一样表示已经没有多余的字符了，跳转到标号2处的代码
+	shrl $8,%ebx # ebx右移8位
+	jmp 1b # 跳转到标号1，继续操作（总共可能最多会有8次读取al的操作）
+2:	movl %ecx,head(%edx) # ecx寄存器中的值写入到read_q的head域 
+	movl proc_list(%edx),%ecx # ecx 设置为read_q -> proc_list 
+	testl %ecx,%ecx # ecx是否为0,
+	je 3f #如果为0(NULL),表示没有等待该控制台的进程，直接跳转到标号3处
+	# 注意：每个进程的第一个字段就是进程状态，因此这里可以用 (%ecx) 表示进程的状态字段
+	movl $0,(%ecx) # 唤醒该等待的进程（直接置改进成的状态为0：就绪状态）
+3:	popl %edx # 依次恢复入栈的edx,ecx的值
 	popl %ecx
-	ret // 子程序返回
+	ret # 子程序返回
 
 ctrl:	movb $0x04,%al
 	jmp 1f
