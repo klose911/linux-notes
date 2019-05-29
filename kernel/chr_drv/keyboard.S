@@ -13,18 +13,42 @@
 #include <linux/config.h>
 
 .text
-.globl keyboard_interrupt
+
+// 声明keyboard_interrupt函数，初始化时设置键盘中断描述符
+.globl keyboard_interrupt 
 
 /*
  * these are for the keyboard read functions
- */
+	*/
+
+// tty_queue队列缓存长度
 size	= 1024		/* must be a power of two ! And MUST be the same
 			   as in tty_io.c !!!! */
+// tty_queue的head域在tty_queue结构中的偏移
 head = 4
+// tty_queue的tail域在tty_queue结构中的偏移	
 tail = 8
+// tty_queue的proc_list域在tty_queue结构中的偏移	
 proc_list = 12
+// tty_queue的buf域在tty_queue结构中的偏移	
 buf = 16
 
+	/*
+	 * 这里使用3个标志字节：mode是键盘特殊键（ctrl，alt或caps等）按下的标志，leds是键盘指示灯的状态标志，e0是当收到扫描码0xe0或0xe1时设置的标志
+	 *
+	 * 1) mode 各位的含义如下：
+	 * 位7：caps键按下，位6：caps键的状态（与leds中对应caps的标志位一样），位5：右alt键按下，位4：左alt键按下
+	 * 位3：右ctrl键按下，位2：左ctrl键按下，位1：右shift键按下，位0：左shift键按下
+	 *
+	 * 2) leds 各位的含义如下：
+	 * 位7～3：全0不用，位2：caps-lock，位1：num-lock（初始设置为1），位0：scroll-lock
+	 *
+	 * 3) e0 各位的含义如下：
+	 * 位７~2：全0不用
+	 * 位1:值为1意味收到0xe1扫描码的标志，表示后面还跟着2个字符
+	 * 位0:值为1意味收到0xe0扫描码的标志，表示后面还跟着1个字符
+	 * 
+	 */
 mode:	.byte 0		/* caps, alt, ctrl and shift mode */
 leds:	.byte 2		/* num-lock, caps, scroll-lock mode (nom-lock on) */
 e0:	.byte 0
@@ -33,80 +57,108 @@ e0:	.byte 0
  *  con_int is the real interrupt routine that reads the
  *  keyboard scan-code and converts it into the appropriate
  *  ascii character(s).
- */
+	*/
+
+	/*
+	 * 键盘中断处理程序入口点
+	 * 
+	 * 接收到用户的一个按键操作，就会向中断控制器发出一个键盘中断请求给键盘控制器IRQ1。当CPU响应该请求时就会执行键盘中断请求处理程序
+	 * 本处理程序会从键盘控制器相应端口(0x60)读入按键扫描码，并调用对应的扫描码处理子程序进行处理：
+	 * 1. 从0x60端口读入按键的扫描码
+	 * 2. 判断该扫描码是否是0xe0或0xe1:
+	 *    如果是的化，立刻对键盘控制器作出应答，并向中断控制器发出中断结束(EOI)信号，以允许键盘控制器能继续产生中断信号，从而接收后续的字符	 *    
+	 * 3. 如果不是0xe0或0xe1的化，根据扫描码的值调用按键跳转表key_table中的相应按键处理子程序，把扫描码对应的字符放入到读字符缓冲队列read_q中
+	 * 4. 对键盘控制器作出应答，并发送EOI信号
+	 * 5. 调用函数do_tty_interrupt()把read_q中的字符经过处理后放到secodary辅助队列中
+	 * 
+	 */
 keyboard_interrupt:
-	pushl %eax
+	pushl %eax // eax, ebx, ecx, edx寄存器 压栈
 	pushl %ebx
 	pushl %ecx
 	pushl %edx
-	push %ds
+	push %ds // ds, es 寄存器压栈
 	push %es
-	movl $0x10,%eax
-	mov %ax,%ds
+	movl $0x10,%eax // eax = 0x10 
+	mov %ax,%ds // es, ds 都设置为0x10，也就是内核数据段
 	mov %ax,%es
-	xor %al,%al		/* %eax is scan code */
-	inb $0x60,%al
-	cmpb $0xe0,%al
-	je set_e0
-	cmpb $0xe1,%al
-	je set_e1
-	call key_table(,%eax,4)
-	movb $0,e0
-e0_e1:	inb $0x61,%al
-	jmp 1f
+	xor %al,%al	//清空al	/* %eax is scan code */ 
+	inb $0x60,%al // 从端口0x60读取扫描码到al寄存器
+	cmpb $0xe0,%al // 比较al和0xe0是否相等
+	je set_e0 // 如果相同，则跳转到set_e0标号处的代码
+	cmpb $0xe1,%al // 比较al和0xe0是否相等
+	je set_e1 // 如果相同，则跳转到set_e1标号处的代码
+	call key_table(,%eax,4) // 调用键盘处理程序表key_table + eax*4处的子程序
+	movb $0,e0 // 调用之后e0标志复位
+	/*
+	 * 下面这段代码针对使用8255A的PC标准键盘电路进行硬件复位处理
+	 * 
+	 * 1. 禁止键盘
+	 * 2. 立刻重新允许键盘
+	 * 
+	 */
+e0_e1:	inb $0x61,%al // 读取0x61端口到al，端口0x61是8255A的输出端口B的地址，该输出端口的第7位(PB7)用于禁止和允许对键盘数据的处理
+	jmp 1f // 延迟一会
 1:	jmp 1f
-1:	orb $0x80,%al
-	jmp 1f
+1:	orb $0x80,%al // a1的第7位置位（禁止键盘工作） 
+	jmp 1f // 延迟一会
 1:	jmp 1f
-1:	outb %al,$0x61
-	jmp 1f
-1:	jmp 1f
-1:	andb $0x7F,%al
+1:	outb %al,$0x61 // PPI PB7置位
+	jmp 1f // 延迟一会
+1:	jmp 1f 
+1:	andb $0x7F,%al // a1的第7位复位（允许键盘工作）
 	outb %al,$0x61
-	movb $0x20,%al
-	outb %al,$0x20
-	pushl $0
-	call do_tty_interrupt
-	addl $4,%esp
-	pop %es
-	pop %ds
-	popl %edx
+	movb $0x20,%al // PPI PB7复位
+	outb %al,$0x20 // 向8259中断芯片发送EOI（中断结束）信号
+	pushl $0 // 控制台号 tty=0作为参数入栈
+	call do_tty_interrupt // 调用do_tty_interrupt函数（具体功能见tty_io.c中代码） 
+	addl $4,%esp // 丢弃刚才入栈的参数
+	pop %es // 弹出开始入栈的es，ds寄存器
+	pop %ds 
+	popl %edx // 依次恢复开始入栈的edx, ecx, ebx, eax寄存器的值
 	popl %ecx
 	popl %ebx
 	popl %eax
-	iret
-set_e0:	movb $1,e0
-	jmp e0_e1
-set_e1:	movb $2,e0
-	jmp e0_e1
+	iret // 键盘中断处理返回
+set_e0:	movb $1,e0 // 设置e0标志位为1
+	jmp e0_e1 // 跳转到e0_e1标记处代码
+set_e1:	movb $2,e0 // 设置e0标志位为2
+	jmp e0_e1 // 跳转到e0_e1标记处代码
 
 /*
  * This routine fills the buffer with max 8 bytes, taken from
  * %ebx:%eax. (%edx is high). The bytes are written in the
  * order %al,%ah,%eal,%eah,%bl,%bh ... until %eax is zero.
- */
+	*/
+
+	/*
+	 * 下面子程序把从ebx:eax中的最多8个字符放入到读缓冲队列中，（ebx是高字）字符依次放入的顺序是 al,ah,eal,eah,bl,bh,ebl,ebh 直到eax为空
+	 * 
+	 */
 put_queue:
-	pushl %ecx
+	pushl %ecx // ecx, edx依次入栈 
 	pushl %edx
-	movl table_list,%edx		# read-queue for console
-	movl head(%edx),%ecx
-1:	movb %al,buf(%edx,%ecx)
-	incl %ecx
-	andl $size-1,%ecx
-	cmpl tail(%edx),%ecx		# buffer full - discard everything
-	je 3f
-	shrdl $8,%ebx,%eax
-	je 2f
-	shrl $8,%ebx
-	jmp 1b
-2:	movl %ecx,head(%edx)
-	movl proc_list(%edx),%ecx
-	testl %ecx,%ecx
-	je 3f
-	movl $0,(%ecx)
-3:	popl %edx
+	// 把table_list变量地址处的值（实际上是&tty_table[0].read_q， 也就是“控制台”读队列的地址）放入到edx寄存器
+	movl table_list,%edx		# read-queue for console 
+	movl head(%edx),%ecx // 把控制台read_q结构里的head指针值放入到 ecx 
+1:	movb %al,buf(%edx,%ecx) // 将al寄存器的值放入到read_q->buf[read_q->head]处
+	incl %ecx // ecx + 1 
+	andl $size-1,%ecx // 调整ecx的值，如果溢出，则回到开始处(0x0111111111 & 0x1000000000 = 0)  
+	cmpl tail(%edx),%ecx		# buffer full - discard everything // 比较tail指针值和exc寄存器中的值是否一样
+	je 3f // 一样，表示缓冲区已经满了，则跳转标号3处的代码：丢弃所有的扫描码
+	shrdl $8,%ebx,%eax // 将ebx中的8个字符右移8位到eax中，ebx保持不变
+	je 2f // ebx和eax是否一样，如果一样表示已经没有多余的字符了，跳转到标号2处的代码
+	shrl $8,%ebx // ebx右移8位
+	jmp 1b // 跳转到标号1，继续操作（总共可能最多会有8次读取al的操作）
+2:	movl %ecx,head(%edx) // ecx寄存器中的值写入到read_q的head域 
+	movl proc_list(%edx),%ecx // ecx 设置为read_q -> proc_list 
+	testl %ecx,%ecx // ecx是否为0,
+	je 3f //如果为0(NULL),表示没有等待该控制台的进程，直接跳转到标号3处
+	// 注意：每个进程的第一个字段就是进程状态，因此这里可以用 (%ecx) 表示进程的状态字段
+	movl $0,(%ecx) // 唤醒该等待的进程（直接置改进成的状态为0：就绪状态）
+3:	popl %edx // 依次恢复入栈的edx,ecx的值
 	popl %ecx
-	ret
+	ret // 子程序返回
 
 ctrl:	movb $0x04,%al
 	jmp 1f
@@ -116,6 +168,7 @@ alt:	movb $0x10,%al
 	addb %al,%al
 2:	orb %al,mode
 	ret
+	
 unctrl:	movb $0x04,%al
 	jmp 1f
 unalt:	movb $0x10,%al
