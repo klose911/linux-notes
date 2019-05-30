@@ -88,7 +88,8 @@ keyboard_interrupt:
 	je set_e0 # 如果相同，则跳转到set_e0标号处的代码
 	cmpb $0xe1,%al # 比较al和0xe0是否相等
 	je set_e1 # 如果相同，则跳转到set_e1标号处的代码
-	call key_table(,%eax,4) # 调用键盘处理程序表key_table + eax*4处的子程序
+	# 调用键盘处理程序表(key_table+eax * 4)处的子程序
+	call key_table(,%eax,4) 
 	movb $0,e0 # 调用之后e0标志复位
 	/*
 	 * 下面这段代码针对使用8255A的PC标准键盘电路进行硬件复位处理
@@ -279,8 +280,8 @@ cursor:
 	# 0x53 - 0x47 = 12 
 	cmpb $12,%al # 比较12和al
 	ja 1f # 扫描码 > 0x53，同样不处理
-	jne cur2	＃不等于12，转而执行cur2处的代码
-	＃12对应于del键盘，那么需要检查是否是ctrl+alt+del
+	jne cur2 # 不等于12，转而执行cur2处的代码
+	# 12对应于del键盘，那么需要检查是否是ctrl+alt+del
 	testb $0x0c,mode # 检查mode中的位2和位3，如果置位说明ctrl被按下
 	je cur2 # 没有按下ctrl，跳转执行cur2处的代码
 	testb $0x30,mode # 检查mode中的位4和位5，如果置位说明alt被按下
