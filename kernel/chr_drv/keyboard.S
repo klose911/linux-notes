@@ -160,93 +160,160 @@ put_queue:
 	popl %ecx
 	ret # 子程序返回
 
-ctrl:	movb $0x04,%al
-	jmp 1f
-alt:	movb $0x10,%al
-1:	cmpb $0,e0
-	je 2f
-	addb %al,%al
-2:	orb %al,mode
-	ret
-	
-unctrl:	movb $0x04,%al
-	jmp 1f
-unalt:	movb $0x10,%al
-1:	cmpb $0,e0
-	je 2f
-	addb %al,%al
-2:	notb %al
-	andb %al,mode
+	/**
+	 * 下面这段代码根据ctrl或alt的扫描码，分别设置mode标志中的相应位
+	 * 
+	 * 如果在该扫描码前收到过0xe0扫描码（e0标志置位），则说明按下的是键盘右边的ctrl或alt键，则对应设置ctrl或alt在模式标志mode中的相应位
+	 *
+	 */
+ctrl:	movb $0x04,%al # 0x04是mode标志中左ctrl键对应的位（位2）
+	jmp 1f # 跳转到下面标号1处的代码
+alt:	movb $0x10,%al # 0x10是mode标志中左alt键对应的位（位4）
+1:	cmpb $0,e0 # e0是否为0
+	je 2f # e0没有置位，则跳转到下面标号2处的代码
+	# 0x04 + 0x04 = 0x08（位3），0x10 + 0x10 = 0x20（位5）
+	addb %al,%al # e0已经置位，则按下的是右ctrl或右alt，设置相应右键ctrl或alt的标志位（位3或位5） 
+2:	orb %al,mode # 设置mode中对应的位
 	ret
 
+	/**
+	 * 处理ctrl或alt的松开时的扫描码，分别复位mode标志中的相应位
+	 * 
+	 * 如果在该扫描码前收到过0xe0扫描码（e0标志置位），则说明按下的是键盘右边的ctrl或alt键，则对应复位ctrl或alt在模式标志mode中的相应位
+	 * 
+	 */
+unctrl:	movb $0x04,%al # 0x04是mode标志中左ctrl键对应的位（位2）
+	jmp 1f # 跳转到下面标号1处的代码
+unalt:	movb $0x10,%al # 0x10是mode标志中左alt键对应的位（位4）
+1:	cmpb $0,e0 # e0是否为0
+	je 2f # e0没有置位，则跳转到下面标号2处的代码
+	addb %al,%al # e0已经置位，则按下的是右ctrl或右alt，复位相应右键ctrl或alt的标志位（位3或位5）
+2:	notb %al # 复位标志中相应的标志位
+	andb %al,mode 
+	ret
+
+	/*
+	 * 处理左shift，按下和松开时的扫描码，分别置位和复位 mode标志中相应位
+	 * 
+	 */
 lshift:
-	orb $0x01,mode
+	orb $0x01,mode # 左shift按下，设置mode中的位0
 	ret
 unlshift:
-	andb $0xfe,mode
+	andb $0xfe,mode # 左shift松开，复位mode中的位0
 	ret
+	
+	/*
+	 * 处理右shift，按下和松开时的扫描码，分别置位和复位 mode标志中相应位
+	 * 
+	 */
 rshift:
-	orb $0x02,mode
+	orb $0x02,mode # 右shift按下，设置mode中的位1
 	ret
 unrshift:
-	andb $0xfd,mode
+	andb $0xfd,mode # 右shift松开，复位mode中的位1
 	ret
 
-caps:	testb $0x80,mode
-	jne 1f
-	xorb $4,leds
-	xorb $0x40,mode
-	orb $0x80,mode
+	/*
+	 * 收到caps键扫描码的处理
+	 * 
+	 * 通过mode中的第7位可以知道当前caps键是否已经按下的状态：
+	 * 若是，则返回
+	 * 否则就翻转mode中的caps键按下的（位6）和leds标志中caps-lock（位2），设置mode标志中caps已经按下的标志（位7）
+	 * 
+	 */
+caps:	testb $0x80,mode # 测试mode中第7位是否已经按下（即caps是否在按下状态）
+	jne 1f # caps已经按下，直接跳转到下面的标号1处（curs2后面的1）
+	xorb $4,leds # 翻转leds标志中的位2（caps-lock位）
+	xorb $0x40,mode # 翻转mode中的位6（caps位）
+	orb $0x80,mode # 设置mode中的位7（caps已经按下状态位）
+
+	/*
+	 * 根据leds标志位，关闭或打开键盘指示灯
+	 * 
+	 */
 set_leds:
-	call kb_wait
+	call kb_wait # 等待键盘输入缓存空
 	movb $0xed,%al		/* set leds command */
-	outb %al,$0x60
-	call kb_wait
-	movb leds,%al
-	outb %al,$0x60
+	outb %al,$0x60 # 发送键盘命令0xed到0x60端口
+	call kb_wait # 等待键盘输入缓存空
+	movb leds,%al # 设置al为leds标志
+	outb %al,$0x60 # 向0x60端口发送leds标志（开启或关闭指示灯的命令参数）
 	ret
-uncaps:	andb $0x7f,mode
+
+	/*
+	 * 松开caps键扫描码
+	 * 
+	 */
+uncaps:	andb $0x7f,mode # 复位mode中的位7
 	ret
+
+	/*
+	 * 按下scroll键的扫描码
+	 * 
+	 */
 scroll:
-	xorb $1,leds
-	jmp set_leds
-num:	xorb $2,leds
-	jmp set_leds
+	xorb $1,leds # 翻转leds标志中的位0
+	jmp set_leds # 关闭或打开键盘指示灯
+
+	/*
+	 * 按下num键的扫描码
+	 * 
+	 */
+num:	xorb $2,leds # 翻转leds标志中的位1 
+	jmp set_leds # 关闭或打开键盘指示灯
 
 /*
  *  curosr-key/numeric keypad cursor keys are handled here.
  *  checking for numeric keypad etc.
- */
+	*/
+
+	/*
+	 * 处理方向键/数字小键盘上的方向键/数字键
+	 * 
+	 */
 cursor:
-	subb $0x47,%al
-	jb 1f
-	cmpb $12,%al
-	ja 1f
-	jne cur2		/* check for ctrl-alt-del */
-	testb $0x0c,mode
-	je cur2
-	testb $0x30,mode
-	jne reboot
-cur2:	cmpb $0x01,e0		/* e0 forces cursor movement */
-	je cur
-	testb $0x02,leds	/* not num-lock forces cursor */
-	je cur
+	subb $0x47,%al # al - 0x47
+	# 扫描码如果是数字小键盘上的键，其扫描码 >= 0x47 ? 
+	jb 1f # 扫描码 <= 0x47，不处理
+	# 0x53 - 0x47 = 12 
+	cmpb $12,%al # 比较12和al
+	ja 1f # 扫描码 > 0x53，同样不处理
+	jne cur2	＃不等于12，转而执行cur2处的代码
+	＃12对应于del键盘，那么需要检查是否是ctrl+alt+del
+	testb $0x0c,mode # 检查mode中的位2和位3，如果置位说明ctrl被按下
+	je cur2 # 没有按下ctrl，跳转执行cur2处的代码
+	testb $0x30,mode # 检查mode中的位4和位5，如果置位说明alt被按下
+	jne reboot # 按下了alt（实际上按下了ctrl+alt+del），执行重启函数reboot
+	# e0标志被置位了吗？
+cur2:	cmpb $0x01,e0		/* e0 forces cursor movement */ 
+	je cur # e0置位则跳转到cur处执行（光标移动处理）
+	# e0没有置位，测试leds的num-lock是否置位
+	testb $0x02,leds	/* not num-lock forces cursor */ 
+	je cur # 没有置位，也跳转到cur处执行
+	# 测试mode中的位0和位1是否置位，置位说明shift被按下
 	testb $0x03,mode	/* shift forces cursor */
-	jne cur
-	xorl %ebx,%ebx
-	movb num_table(%eax),%al
-	jmp put_queue
+	jne cur # shift没有被置位，跳转到cur处执行
+	xorl %ebx,%ebx # 清空ebx
+	movb num_table(%eax),%al # 以eax为索引，取对应数字字符到al： num_table[%eax] -> al
+	# 注意，由于要放入的字符数 <= 4，所以必须把ebx清零
+	jmp put_queue # 把al中的字符放入读缓冲队列
 1:	ret
 
-cur:	movb cur_table(%eax),%al
-	cmpb $'9,%al
-	ja ok_cur
-	movb $'~,%ah
-ok_cur:	shll $16,%eax
-	movw $0x5b1b,%ax
-	xorl %ebx,%ebx
-	jmp put_queue
+	/*
+	 * 处理光标移动或插入删除按键
+	 * 
+	 */
+cur:	movb cur_table(%eax),%al # 以eax为索引，取光标字符表中相应键的代表字符到al：cur_table[%eax] -> al 
+	cmpb $'9,%al # 如果字符 <= '9' (5,6,2,3)，说明是上一页，下一页，插入，删除键，则功能字符序列中要添加'~'
+	ja ok_cur # 非功能键，跳转到ok_cur处执行
+	movb $'~,%ah # 上一页，下一页，插入，删除键，则功能字符序列中要添加'~'
+ok_cur:	shll $16,%eax # 将ax中的内容移到eax的高字处
+	movw $0x5b1b,%ax # 把'esc['放入到ax中，与eaxo高字中字符组成移动序列 
+	xorl %ebx,%ebx # ebx清零
+	jmp put_queue # 把eax中的移动序列放入读缓冲队列
 
+	# 数字小键盘上对应的数字的ASCII码表
 #if defined(KBD_FR)
 num_table:
 	.ascii "789 456 1230."
@@ -254,6 +321,7 @@ num_table:
 num_table:
 	.ascii "789 456 1230,"
 #endif
+	# 小键盘上方向键或插入，删除键等对应的移动表示字符表
 cur_table:
 	.ascii "HA5 DGC YB623"
 
