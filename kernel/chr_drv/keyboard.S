@@ -430,6 +430,7 @@ alt_map:
 	.byte '|
 	.fill 10,1,0
 
+// 美式键盘
 #elif defined(KBD_US) 
 
 key_map:
