@@ -328,41 +328,59 @@ cur_table:
 
 /*
  * this routine handles function keys
- */
+	*/
+
+	/*
+	 * 处理功能键F1~F12
+	 */
 func:
+	# 调用显示状态show_stat函数
 	pushl %eax
 	pushl %ecx
 	pushl %edx
-	call show_stat
+	call show_stat 
 	popl %edx
 	popl %ecx
 	popl %eax
-	subb $0x3B,%al
-	jb end_func
-	cmpb $9,%al
-	jbe ok_func
-	subb $18,%al
-	cmpb $10,%al
-	jb end_func
-	cmpb $11,%al
-	ja end_func
+	subb $0x3B,%al # al中放入功能键的索引号（键'F1'的扫描码是0x3B）
+	jb end_func # 如果小于0x3B，则不处理直接返回
+	cmpb $9,%al # 功能键是否是F1~F10
+	jbe ok_func # 是的：执行ok_func处的代码
+	subb $18,%al # F11,F12的扫描码是0x57,0x58(0x57-0x3B=0x1c=28，这里为了获得索引所以只减去18) 
+	cmpb $10,%al # al是否等于10 
+	jb end_func # 等于10：是功能键F11
+	cmpb $11,%al # al是否等于11
+	ja end_func # 等于11：是功能键F12
 ok_func:
-	cmpl $4,%ecx		/* check that there is enough room */
-	jl end_func
-	movl func_table(,%eax,4),%eax
-	xorl %ebx,%ebx
-	jmp put_queue
+	cmpl $4,%ecx		/* check that there is enough room */ #检查空间
+	jl end_func # 需要放入4个字符，如果放不下，则返回？？？
+	movl func_table(,%eax,4),%eax # 取功能键对应的字符序列，放入到eax中
+	xorl %ebx,%ebx # 清空ebx 
+	jmp put_queue # 把eax中的ASCII码序列放入读缓冲队列
 end_func:
 	ret
 
 /*
  * function keys send F1:'esc [ [ A' F2:'esc [ [ B' etc.
- */
+*/
+	
+	/*
+	 * 功能键F1~F12对应的发送到缓冲队列中的字符序列（ASCII码）
+	 * F1:'esc [ [ A'，F2:'esc [ [ B', ... , F12:'esc [ [ L'
+	 *
+	 * 注意：下面表示的是对应字符的ASCII码，而且顺序和发送的正好相反
+	 * 比如,'A'的ASCII码是0x41, '['的ASCII码是0x5b，'esc'的ASCII码是0x1b
+	 * 
+ 	 */
 func_table:
 	.long 0x415b5b1b,0x425b5b1b,0x435b5b1b,0x445b5b1b
 	.long 0x455b5b1b,0x465b5b1b,0x475b5b1b,0x485b5b1b
 	.long 0x495b5b1b,0x4a5b5b1b,0x4b5b5b1b,0x4c5b5b1b
 
+	/*
+	 * 扫描码对应的ASCII码映射表：将相应的扫描码映射成ASCII码
+	 * 
+	 */
 #if	defined(KBD_FINNISH)
 key_map:
 	.byte 0,27
@@ -412,26 +430,26 @@ alt_map:
 	.byte '|
 	.fill 10,1,0
 
-#elif defined(KBD_US)
+#elif defined(KBD_US) # US键盘
 
 key_map:
-	.byte 0,27
-	.ascii "1234567890-="
-	.byte 127,9
+	.byte 0,27 # 扫描码 0x00(0:NUL),0x01(27:Esc)对应的ASCII码
+	.ascii "1234567890-=" # 扫描码 0x02,0x03...0x0c,0x0d对应的ASCII码
+	.byte 127,9 
 	.ascii "qwertyuiop[]"
-	.byte 13,0
+	.byte 13,0 
 	.ascii "asdfghjkl;'"
 	.byte '`,0
 	.ascii "\\zxcvbnm,./"
-	.byte 0,'*,0,32		/* 36-39 */
-	.fill 16,1,0		/* 3A-49 */
-	.byte '-,0,0,0,'+	/* 4A-4E */
-	.byte 0,0,0,0,0,0,0	/* 4F-55 */
+	.byte 0,'*,0,32		/* 36-39 */ # 扫描码 0x36～0x39对应的ASCII码
+	.fill 16,1,0		/* 3A-49 */ # 扫描码 0x3A～0x49对应的ASCII码
+	.byte '-,0,0,0,'+	/* 4A-4E */ # 扫描码 0x4A～0x4E对应的ASCII码
+	.byte 0,0,0,0,0,0,0	/* 4F-55 */ # 扫描码 0x36～0x39对应的ASCII码
 	.byte '<
 	.fill 10,1,0
 
 
-shift_map:
+shift_map: # Shift键同时按下时候的扫描码
 	.byte 0,27
 	.ascii "!@#$%^&*()_+"
 	.byte 127,9
@@ -447,7 +465,7 @@ shift_map:
 	.byte '>
 	.fill 10,1,0
 
-alt_map:
+alt_map: # Alt键同时按下时对应的扫描码
 	.byte 0,0
 	.ascii "\0@\0$\0\0{[]}\\\0"
 	.byte 0,0
