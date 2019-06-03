@@ -430,7 +430,7 @@ alt_map:
 	.byte '|
 	.fill 10,1,0
 
-#elif defined(KBD_US) # US键盘
+#elif defined(KBD_US) 
 
 key_map:
 	.byte 0,27 # 扫描码 0x00(0:NUL),0x01(27:Esc)对应的ASCII码
