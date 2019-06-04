@@ -590,48 +590,72 @@ alt_map:
 /*
  * do_self handles "normal" keys, ie keys that don't change meaning
  * and which have just one character returns.
- */
+	*/
+
+	/*
+	 * 处理普通按键：不会改变它的意义，并且只返回一个字符
+	 * 
+	 */
 do_self:
-	lea alt_map,%ebx
-	testb $0x20,mode		/* alt-gr */
-	jne 1f
-	lea shift_map,%ebx
-	testb $0x03,mode
-	jne 1f
-	lea key_map,%ebx
-1:	movb (%ebx,%eax),%al
-	orb %al,%al
-	je none
-	testb $0x4c,mode		/* ctrl or caps */
-	je 2f
-	cmpb $'a,%al
-	jb 2f
-	cmpb $'},%al
-	ja 2f
-	subb $32,%al
+	lea alt_map,%ebx # 取alt键按下时的映射表基址&alt_map到ebx
+	# mode标志中位5：右alt键按下，所以这里和0x20(10000b)比较
+	testb $0x20,mode # 比较0x20和mode		/* alt-gr */
+	jne 1f # 0x20 & mode != 0 : 右alt键按下了，跳到标号1处执行
+	// 执行到这里说明右alt没有按下
+	lea shift_map,%ebx # 取shift键按下时的映射表基址&shift_map到ebx
+	# mode标志中位1：右shift键按下，位0：左shift键按下，所以这里和0x03(11b)比较
+	testb $0x03,mode # 比较0x03和mode
+	jne 1f # 0x03 & mode != 0: 左shift或右shift按下，跳到标号1处执行
+	// 执行到这里说明右alt，左，右shift都没有按下！！！
+	lea key_map,%ebx # 取普通映射表b基址&key_map到ebx
+1:	movb (%ebx,%eax),%al # 将扫描码作为索引值，取对应的ASCII码到al
+	orb %al,%al # 检查看是否有对应的扫描码
+	je none # al == 0：没有对应的扫描码，直接返回
+	// 测试caps灯亮，并且ctrl键是否按下
+	// mode标志中位6：caps灯亮，位3：右ctrl键按下，位2：左ctrl键按下，因此这里和0x4c(1001100b)做比较
+	testb $0x4c,mode # 0x4c和mode做与操作 /* ctrl or caps */
+	je 2f # $0x4c & mode == 0 : 跳转到标号2处执行
+	// 执行到这里说明要么caps灯亮或者ctrl键按下，可能需要将字符转换成大写
+	cmpb $'a,%al # 比较'字符a的ASCII码'和al 
+	jb 2f # al < 'a : 跳转到标号2处
+	cmpb $'},%al # 比较"字符}的ASCII马"和al 
+	ja 2f # al > '} : 跳转到标号2处
+	subb $32,%al # 将al转化为大写字符（减0x20）
+	// 测试ctrl键是否被按下
 2:	testb $0x0c,mode		/* ctrl */
-	je 3f
-	cmpb $64,%al
-	jb 3f
-	cmpb $64+32,%al
-	jae 3f
-	subb $64,%al
+	je 3f # mode & 0x0c == 0 ：位2，3都没有被置位，则跳转到标号3处
+	// 执行到这里说明ctrl键被按下
+	cmpb $64,%al # 将al与6'@'(64)字符做比较
+	jb 3f # al < '@' : 跳转到标号3处
+	cmpb $64+32,%al # 将al与'`'(96)做比较
+	jae 3f # al > '`' : 跳转到标号3处
+	subb $64,%al # 否则al - 0x40：转化为0x00～0x1f的控制字符
+	// 测试左alt是否按下：mode位的第4位代表左alt
+	// 如果左alt按下：将字符的第7位置位，生成大于0x7f的扩展字符集中的字符
 3:	testb $0x10,mode		/* left alt */
-	je 4f
-	orb $0x80,%al
-4:	andl $0xff,%eax
-	xorl %ebx,%ebx
-	call put_queue
+	je 4f # 0x10 != mode : 没有则跳转到标号4
+	orb $0x80,%al # 按下了左alt，则字符的位7置位
+	// 将al中的字符放入缓冲队列
+4:	andl $0xff,%eax # 清空eax的高字和ah
+	xorl %ebx,%ebx # 清空ebx
+	call put_queue # 将字符放入缓冲读队列
 none:	ret
 
 /*
  * minus has a routine of it's own, as a 'E0h' before
  * the scan code for minus means that the numeric keypad
  * slash was pushed.
- */
-minus:	cmpb $1,e0
-	jne do_self
-	movl $'/,%eax
+	*/
+
+	/*
+	 * 减号有它自己的处理程序，因为如果在减号之前有扫描码'0xe0'表示按下了数字键盘的斜杠键
+	 * 
+	*/
+	
+minus:	cmpb $1,e0 # 比较1和e0
+	jne do_self # e0 没有被置位，则调用do_self子程序
+	// 反之把'/'送入缓冲读队列
+	movl $'/,%eax 
 	xorl %ebx,%ebx
 	jmp put_queue
 
@@ -639,7 +663,15 @@ minus:	cmpb $1,e0
  * This table decides which routine to call when a scan-code has been
  * gotten. Most routines just call do_self, or none, depending if
  * they are make or break.
- */
+	*/
+
+	/*
+	 * 根据对应的扫描码映射的子程序地址跳转表
+	 * 下标值对应于相应的扫描码，数据项对应于相应子程序的地址
+	 *
+	 * 注意：对于同一个键做的按键(make)和释放键(break)动作，在这张表里有2个不同的数据项！
+	 * 
+	 */
 key_table:
 	.long none,do_self,do_self,do_self	/* 00-03 s0 esc 1 2 */
 	.long do_self,do_self,do_self,do_self	/* 04-07 3 4 5 6 */
@@ -709,21 +741,37 @@ key_table:
 /*
  * kb_wait waits for the keyboard controller buffer to empty.
  * there is no timeout - if the buffer doesn't empty, we hang.
- */
+	*/
+
+	/*
+	 * 子程序 kb_wait: 等待键盘控制器输入缓存为空
+	 *
+	 * 注意：这里没有超时，如果键盘控制器输入缓存一直满，程序会永远等待
+	 * 
+	 */
 kb_wait:
-	pushl %eax
-1:	inb $0x64,%al
-	testb $0x02,%al
-	jne 1b
-	popl %eax
-	ret
+	pushl %eax # eax入栈
+1:	inb $0x64,%al # 从0x64端口读取磁盘控制器状态字到al寄存器
+	testb $0x02,%al # 测试状态字的第1位
+	jne 1b # 0x02 & al != 0: 状态字的第1位被置位，则跳转到标号1处，开始无限循环，直到键盘控制器的输入缓存为空
+	popl %eax # eax出栈
+	ret 
 /*
  * This routine reboots the machine by asking the keyboard
  * controller to pulse the reset-line low.
- */
+	*/
+	/*
+	 * 子程序 reboot: 系统重启
+	 */
 reboot:
-	call kb_wait
+	call kb_wait # 清空键盘控制器输入缓存
+	// 往物理内存0x472处写入值0x1234：该位置是启动模式的标志字
+	// 在启动过程中ROM BIOS会从这个位置读取该标志，并根据其值来指导下一步的执行：
+	// 如果该值是0x1234则执行热启动（跳过内存检测过程），反之则执行冷启动
 	movw $0x1234,0x472	/* don't do memory check */
+	// 向系统复位引脚和A20线输出”负脉冲“，使系统复位重启
+	// 系统复位引脚和A20线对应的是”键盘控制输出端口P2“的”P20和P21引脚“
+	// 0xfc(11111100) 其中的最低2位为0,正好分别对应了这两个引脚的负脉冲
 	movb $0xfc,%al		/* pulse reset and A20 low */
-	outb %al,$0x64
-die:	jmp die
+	outb %al,$0x64 # 向键盘控制器0x64端口写入值0xfc 
+die:	jmp die # 无限等待重启
