@@ -116,49 +116,92 @@ static void sysbeep(void);
 #define RESPONSE "\033[?1;2c" // “中断属性控制序列”：('Esc [?1;2c')
 
 /* NOTE! gotoxy thinks x==video_num_columns is ok */
+
+/*
+ * 跟踪光标当前的位置
+ *
+ * new_x: 光标所在列号
+ * new_y: 光标所在行号
+ *
+ * 无返回
+ *
+ * 更新光标当前的位置变量x,y，并修正光标在内存中对应的地址pos
+ * 
+ */
 static inline void gotoxy(unsigned int new_x,unsigned int new_y)
 {
-        if (new_x > video_num_columns || new_y >= video_num_lines)
-                return;
-        x=new_x;
-        y=new_y;
-        pos=origin + y*video_size_row + (x<<1);
+        // 检查参数的有效性
+        if (new_x > video_num_columns || new_y >= video_num_lines) // “给定的光标列号”超出“显示的最大列数” 或 “给定的光标行号”不小于“显示的最大行数”
+                return; // 直接返回
+        x=new_x; // 更新当前光标的列号
+        y=new_y; // 更新当前光标的行号
+        // 因为1个光标点需要用2个字节表示，所以'x<<1'
+        pos=origin + y*video_size_row + (x<<1); // 更新当前光标在内存中的地址（注意：这是绝对地址！）
 }
 
+/*
+ * 设置滚屏起始显存地址
+ *
+ * 无参数
+ *
+ * 无返回
+ *
+ */
 static inline void set_origin(void)
 {
-        cli();
-        outb_p(12, video_port_reg);
-        outb_p(0xff&((origin-video_mem_start)>>9), video_port_val);
-        outb_p(13, video_port_reg);
-        outb_p(0xff&((origin-video_mem_start)>>1), video_port_val);
-        sti();
+        cli(); // 关闭中断
+        outb_p(12, video_port_reg); // 向显卡的选择端口写入12：选择显示控制数据寄存器r12
+        // 滚屏起始位置计算方式 (origin-video_mem_start)/2，其中origin表示光标在内存中的地址，video_mem_start和显卡有关，彩色显卡一般是0xb8000
+        // 滚屏起始位置右移9位，高字节清零（实际上表示向右移动8位再除以2，因为每个点需要2个字节来表示）
+        outb_p(0xff&((origin-video_mem_start)>>9), video_port_val); // 向显卡的数据端口写入“滚屏起始位置”的高字节
+        outb_p(13, video_port_reg); // 向显卡的选择端口写入13：选择显示控制数据寄存器r13
+        // 滚屏起始位置右移1位，高字节清零（同样需要除以2）
+        outb_p(0xff&((origin-video_mem_start)>>1), video_port_val); // 向显卡的数据端口写入“滚屏起始位置”的低字节
+        sti(); // 打开中断
 }
 
+/*
+ * 向上翻滚一行：实际上是当前显存中的某个区域在内存中向下移动一行
+ *
+ * 无参数
+ *
+ * 无返回
+ * 
+ */
 static void scrup(void)
 {
-        if (video_type == VIDEO_TYPE_EGAC || video_type == VIDEO_TYPE_EGAM)
+        if (video_type == VIDEO_TYPE_EGAC || video_type == VIDEO_TYPE_EGAM) // VGA显卡，EGA显卡：可以指定范围（区域）进行滚屏操作
         {
+                // 移动起始行 top == 0 并且移动最底行 bottom == video_num_lines(25)：整个屏幕向下移动一行
                 if (!top && bottom == video_num_lines) {
-                        origin += video_size_row;
-                        pos += video_size_row;
-                        scr_end += video_size_row;
-                        if (scr_end > video_mem_end) {
-                                __asm__("cld\n\t"
-                                        "rep\n\t"
-                                        "movsl\n\t"
-                                        "movl video_num_columns,%1\n\t"
-                                        "rep\n\t"
-                                        "stosw"
+                        origin += video_size_row; // 屏幕左上角对应的起始内存位置origin调整为向下移动一行对应的内存地址
+                        pos += video_size_row; // 跟踪跳转当前光标所在的内存地址为向下一行
+                        scr_end += video_size_row; // 跳转屏幕末行末端指针src_end所在的内存地址
+                        if (scr_end > video_mem_end) { // 如果屏幕未行末端指针src_end的地址超出显存了
+                                /*
+                                 * 将屏幕内容除原来第一行以外所有行对应的内存数据移动到video_mem_start处，并在向下移动出现的新行处（应该是最后一行）填入空格字符
+                                 * 
+                                 * %0 - eax(擦除字符+属性) video_erase_char
+                                 * %1 - ecx ：((屏幕字符行数-1)所对应的字符数)/2，以长字移动
+                                 * %2 - edx: 显存起始内存地址 video_mem_start
+                                 * %3 - esi: 屏幕内存起始位置 origin
+                                 */
+                                __asm__("cld\n\t" // 清方向位
+                                        "rep\n\t" // 重复拷贝：将当前屏幕内存数据移动到显存起始处
+                                        "movsl\n\t" 
+                                        "movl video_num_columns,%1\n\t" // 最后一行用擦除字符来填充
+                                        "rep\n\t" 
+                                        "stosw" // 写入内存中
                                         ::"a" (video_erase_char),
                                          "c" ((video_num_lines-1)*video_num_columns>>1),
                                          "D" (video_mem_start),
                                          "S" (origin)
                                         );
-                                scr_end -= origin-video_mem_start;
-                                pos -= origin-video_mem_start;
-                                origin = video_mem_start;
-                        } else {
+                                scr_end -= origin-video_mem_start; // 屏幕末行末端位置减少（origin - video_mem_start）
+                                pos -= origin-video_mem_start; // 当前光标地址减少了(origin - video_mem_start) 
+                                origin = video_mem_start; // 屏幕起始地址为显存起始地址
+                        } else { // 屏幕末端没有超出显存
+                                // 这里只需要用擦除字符填充新行即可，下面汇编和上面类似
                                 __asm__("cld\n\t"
                                         "rep\n\t"
                                         "stosw"
@@ -167,23 +210,27 @@ static void scrup(void)
                                          "D" (scr_end-video_size_row)
                                         );
                         }
-                        set_origin();
+                        set_origin(); // 把新屏幕的滚动窗口内存起始地址写入显卡控制器
                 } else {
+                        // 滚动某段区域（top行到bottom行）
+                        // 直接把屏幕从top行到bottom行中每一行向上移动一行，并在新行填入擦除字符
                         __asm__("cld\n\t"
-                                "rep\n\t"
-                                "movsl\n\t"
-                                "movl video_num_columns,%%ecx\n\t"
+                                "rep\n\t" // 循环操作，将top+1行到bottom行所有的字符移动到top行位置
+                                "movsl\n\t" 
+                                "movl video_num_columns,%%ecx\n\t" // 在新行中填入擦除字符
                                 "rep\n\t"
                                 "stosw"
                                 ::"a" (video_erase_char),
-                                 "c" ((bottom-top-1)*video_num_columns>>1),
-                                 "D" (origin+video_size_row*top),
-                                 "S" (origin+video_size_row*(top+1))
+                                 "c" ((bottom-top-1)*video_num_columns>>1), // (top + 1)行到bottom行所对应的内存长字数
+                                 "D" (origin+video_size_row*top), // top行所对应的内存地址
+                                 "S" (origin+video_size_row*(top+1)) // (top + 1)行的内存地址
                                 );
                 }
         }
-        else		/* Not EGA/VGA */
+        else		/* Not EGA/VGA */ 
         {
+                // MDA显卡：只能整屏滚动，并且会自动调整超出显卡范围的情况，所以这里不对超出显存做单独处理
+                // 这里处理方法和EGA非整屏移动完全一样
                 __asm__("cld\n\t"
                         "rep\n\t"
                         "movsl\n\t"
@@ -198,17 +245,37 @@ static void scrup(void)
         }
 }
 
+/*
+ * 向下滚动一行：将屏幕对应的显存中的滚动窗口向上移动一行，并在移动开始行的上方出现一新行
+ *
+ * 
+ */
 static void scrdown(void)
 {
         if (video_type == VIDEO_TYPE_EGAC || video_type == VIDEO_TYPE_EGAM)
         {
-                __asm__("std\n\t"
-                        "rep\n\t"
+                /*
+                 * 把从top行到bottom-1行的内存数据拷贝到top+1行到bottom行，top行用擦除字符填充
+                 *
+                 * %0 - eax: video_erase_char 擦除字符 + 属性
+                 * %1 - ecx: ((bottom-top-1)*video_num_columns>>1) top行到bottom-1行对应的内存长字数
+                 * %2 - edi: (origin+video_size_row*bottom-4) 窗口右下角最后一个长字位置
+                 * %3 - esi: (origin+video_size_row*(bottom-1)-4) 窗口倒数第二行最后一个长字位置
+                 *
+                 * 移动方向 [edi] -> [esi], 移动ecx个长字
+                 *
+                 * 注意：拷贝是逆向处理的，即先从bottom-1行开始，拷贝到bottom行，依次类推到top行为止
+                 * 这是为了避免在移动显存数据时候不会出现数据覆盖的情况，否则就会出现top行的数据一直复制到bottom行为止 :-(
+                 * 
+                 */
+                __asm__("std\n\t" // 设置拷贝的方向位 
+                        "rep\n\t" // 重复操作，向下移动从top行到bottom -1 行对应的内存数据
                         "movsl\n\t"
+                        // edi 已经减4,所以也是反向填充擦除字符
                         "addl $2,%%edi\n\t"	/* %edi has been decremented by 4 */
                         "movl video_num_columns,%%ecx\n\t"
-                        "rep\n\t"
-                        "stosw"
+                        "rep\n\t" // 将擦除字符填入最上面的新行中
+                        "stosw" 
                         ::"a" (video_erase_char),
                          "c" ((bottom-top-1)*video_num_columns>>1),
                          "D" (origin+video_size_row*bottom-4),
@@ -217,6 +284,7 @@ static void scrdown(void)
         }
         else		/* Not EGA/VGA */
         {
+                // 这里MDA显卡和VGA显卡处理完全一样
                 __asm__("std\n\t"
                         "rep\n\t"
                         "movsl\n\t"
