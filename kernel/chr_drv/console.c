@@ -300,41 +300,66 @@ static void scrdown(void)
         }
 }
 
+/*
+ * 光标在同列位置下移一行
+ * 
+ */
 static void lf(void)
 {
-        if (y+1<bottom) {
-                y++;
-                pos += video_size_row;
+        if (y+1<bottom) { // 光标没有处在最后一行
+                y++; // 当前光标的行值加1 
+                pos += video_size_row; // 当前光标的内存地址加“一行所占用的内存字节数“
                 return;
         }
-        scrup();
+        scrup(); // 屏幕窗口的内容上移一行
 }
 
+/*
+ * 光标在同列位置上移一行
+ * 
+ */
 static void ri(void)
 {
-        if (y>top) {
-                y--;
-                pos -= video_size_row;
+        if (y>top) { // 光标不在最开始一行
+                y--; // 当前光标的行值减1
+                pos -= video_size_row; // 当前光标的内存地址减”一行所占用的内存字节数“
                 return;
         }
-        scrdown();
+        scrdown(); // 屏幕窗口的内容下移一行
 }
 
+/*
+ * 光标回到左边第一列: x = 0 
+ * 
+ */
 static void cr(void)
 {
-        pos -= x<<1;
-        x=0;
+        // 注意：每列需要2个字节来保存，因此这里 x << 1
+        pos -= x<<1; //当前光标内存地址减去”0列到光标所占用的内存字节数“
+        x=0; //当前光标的列值设置为0
 }
 
+/*
+ * 删除光标前一个字符（用”空格“代替）
+ * 
+ */
 static void del(void)
 {
-        if (x) {
-                pos -= 2;
-                x--;
-                *(unsigned short *)pos = video_erase_char;
+        if (x) { // 光标没有处在0列
+                pos -= 2; // 光标对应的内存位置后退2字节
+                x--; // 当前光标的列值减1
+                *(unsigned short *)pos = video_erase_char; // 把“擦除字符”写入当前光标的位置
         }
 }
 
+/*
+ * 删除屏幕上与光标位置相关的部分
+ *
+ * par: 0 - 删除光标到屏幕底端，1 - 删除屏幕开始到光标，2 - 整屏删除
+ *
+ * csi(Control Sequence Introducer) 控制序列引导码
+ * 
+ */
 static void csi_J(int par)
 {
         long count;
@@ -342,20 +367,21 @@ static void csi_J(int par)
 
         switch (par) {
 		case 0:	/* erase from cursor to end of display */
-                count = (scr_end-pos)>>1;
-                start = pos;
+                count = (scr_end-pos)>>1; // 屏幕低端到当前光标所占用的字节数
+                start = pos; // 从当前光标位置开始删除
                 break;
 		case 1:	/* erase from start to cursor */
-                count = (pos-origin)>>1;
-                start = origin;
+                count = (pos-origin)>>1; // 屏幕开头到当前光标所占用的字节数
+                start = origin; // 从屏幕开头开始删除
                 break;
 		case 2: /* erase whole display */
-                count = video_num_columns * video_num_lines;
-                start = origin;
+                count = video_num_columns * video_num_lines; // 整屏占用的字节数
+                start = origin; // 从屏幕开头开始删除
                 break;
 		default:
                 return;
         }
+        // 从start位置开始写入count个擦除字符对应的字
         __asm__("cld\n\t"
                 "rep\n\t"
                 "stosw\n\t"
@@ -364,6 +390,11 @@ static void csi_J(int par)
                 );
 }
 
+/*
+ * 删除一行上与光标位置相关的部分
+ *
+ * par: 0 - 删除从当前光标到行末，1 - 删除行首到当前光标，2 - 删除当前行
+ */
 static void csi_K(int par)
 {
         long count;
@@ -371,22 +402,24 @@ static void csi_K(int par)
 
         switch (par) {
 		case 0:	/* erase from cursor to end of line */
-                if (x>=video_num_columns)
+                if (x>=video_num_columns) // 当前列数已经在最末端，直接返回
                         return;
-                count = video_num_columns-x;
-                start = pos;
+                count = video_num_columns-x; // 删除的列数
+                start = pos; // 从当前位置开始删除
                 break;
 		case 1:	/* erase from start of line to cursor */
-                start = pos - (x<<1);
-                count = (x<video_num_columns)?x:video_num_columns;
+                start = pos - (x<<1); // 从行首开始删除
+                count = (x<video_num_columns)?x:video_num_columns; // 删除的列数
                 break;
 		case 2: /* erase whole line */
-                start = pos - (x<<1);
-                count = video_num_columns;
+                start = pos - (x<<1); // 从行首开始删除
+                count = video_num_columns; // 删除整行的列数
                 break;
 		default:
                 return;
         }
+
+        // 使用擦除字符填写被删除的地方
         __asm__("cld\n\t"
                 "rep\n\t"
                 "stosw\n\t"
@@ -395,41 +428,63 @@ static void csi_K(int par)
                 );
 }
 
+
+/*
+ * 设置显示字符属性：根据参数设置字符显示属性，以后所有发送到终端的字符都将使用这里定义的属性，直到再次执行本控制序列来重新设置属性
+ *
+ * 0 - 默认属性，1 - 粗体并增亮，4 - 下划线，5 - 闪烁，7 - 反显， 27 - 正显
+ *
+ */
 void csi_m(void)
 {
         int i;
 
+        // 注意：一个控制序列可以带多个不同的参数。参数存储在数组par[]中，参数个数保存在npar
+        // 这里循环遍历整个数组来处理o素有的属性
         for (i=0;i<=npar;i++)
                 switch (par[i]) {
-                case 0:attr=0x07;break;
-                case 1:attr=0x0f;break;
-                case 4:attr=0x0f;break;
-                case 7:attr=0x70;break;
-                case 27:attr=0x07;break;
+                case 0:attr=0x07;break; // 默认属性： 0x07 表示黑底白字
+                case 1:attr=0x0f;break; // 粗体增亮
+                case 4:attr=0x0f;break; // 下划线？？？ 这里应该是有错误
+                case 7:attr=0x70;break; // 反显：白底黑字
+                case 27:attr=0x07;break; // 正显：黑底白字
                 }
 }
 
+/*
+ * 设置显示光标
+ * 
+ */
 static inline void set_cursor(void)
 {
-        cli();
-        outb_p(14, video_port_reg);
-        outb_p(0xff&((pos-video_mem_start)>>9), video_port_val);
-        outb_p(15, video_port_reg);
-        outb_p(0xff&((pos-video_mem_start)>>1), video_port_val);
-        sti();
+        cli(); // 关闭中断
+        outb_p(14, video_port_reg); // 向显卡的选择端口写入14：选择显示控制数据寄存器r14
+        outb_p(0xff&((pos-video_mem_start)>>9), video_port_val); // 向显卡的数据端口写入“光标当前位置”的高字节
+        outb_p(15, video_port_reg); // 向显卡的选择端口写入15：选择显示控制数据寄存器r15
+        outb_p(0xff&((pos-video_mem_start)>>1), video_port_val); // 向显卡的数据端口写入“光标当前位置”的低字节
+        sti(); // 开启中断
 }
 
+/*
+ * 发送对VT100的响应序列
+ *
+ * 主机通过发送不带参数或参数是0的“设备属性控制序列”（'Esc [c'或'Esc [0c'）要求终端回答一个设备属性控制序列（Esc-Z的功能于此类似）
+ * 终端则发送以下序列('Esc [?1;2c')来响应主机，表示终端是具有高级视频功能的VT100兼容终端
+ *
+ * 处理过程：将应答序列放入读缓冲队列，并使用copy_to_cooked函数处理后放入辅助队列中
+ * 
+ */
 static void respond(struct tty_struct * tty)
 {
         char * p = RESPONSE;
 
-        cli();
+        cli(); 
         while (*p) {
-                PUTCH(*p,tty->read_q);
-                p++;
+                PUTCH(*p,tty->read_q); // 将应答序列放入读队列
+                p++; // 逐字符放入
         }
         sti();
-        copy_to_cooked(tty);
+        copy_to_cooked(tty); // 转换成归范模式（放入辅助队列中）
 }
 
 static void insert_char(void)
