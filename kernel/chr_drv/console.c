@@ -487,12 +487,18 @@ static void respond(struct tty_struct * tty)
         copy_to_cooked(tty); // 转换成归范模式（放入辅助队列中）
 }
 
+/*
+ * 在当前光标处插入一个空格字符
+ * 
+ */
 static void insert_char(void)
 {
         int i=x;
         unsigned short tmp, old = video_erase_char;
-        unsigned short * p = (unsigned short *) pos;
+        unsigned short * p = (unsigned short *) pos; // 当前光标的内存地址
 
+        // 从当前光标的后面一列开始，直到当前行的末端结束
+        // 把擦除字符放在当前光标处，然后把当前光标开始的所有字符右移一个一列
         while (i++<video_num_columns) {
                 tmp=*p;
                 *p=old;
@@ -501,96 +507,143 @@ static void insert_char(void)
         }
 }
 
+/*
+ * 在当前光标处插入一行：屏幕窗口从当前光标所处的行到屏幕最底行向下卷动一行，光标将停留在插入的新行上
+ * 
+ */
 static void insert_line(void)
 {
         int oldtop,oldbottom;
 
-        oldtop=top;
-        oldbottom=bottom;
-        top=y;
-        bottom = video_num_lines;
-        scrdown();
-        top=oldtop;
+        oldtop=top; // 保存屏幕还没滚动时的开始行的行号
+        oldbottom=bottom; // 保存屏幕还没滚动时的结束行的行号
+        top=y;// 设置屏幕滚动的开始行为当前行
+        bottom = video_num_lines; // 设置屏幕滚动的结束行为屏幕最底下行
+        scrdown(); // 屏幕向下滚动一行
+        top=oldtop; // 恢复原来保存的top和bottom行号
         bottom=oldbottom;
 }
 
+/*
+ * 删除当前光标所处的一个字符
+ * 
+ */
 static void delete_char(void)
 {
         int i;
-        unsigned short * p = (unsigned short *) pos;
+        // 注意：因为当前光标不能变，所以必须使用另外一个指针p来做遍历！
+        unsigned short * p = (unsigned short *) pos; // 当前光标的内存位置
 
-        if (x>=video_num_columns)
+        if (x>=video_num_columns) // x 超出当前行的最大列数，直接返回
                 return;
         i = x;
+
+        // 从当前光标开始遍历，直到最后一列结束，所有字符左移一列
         while (++i < video_num_columns) {
                 *p = *(p+1);
                 p++;
         }
-        *p = video_erase_char;
+        *p = video_erase_char; // 当前行的最末尾插入一个擦除字符
 }
 
+/*
+ * 删除当前光标所处的行：从光标开始的那行到屏幕最底下行向上卷动一行，光标停留在原来行
+ *
+ */
 static void delete_line(void)
 {
         int oldtop,oldbottom;
 
-        oldtop=top;
-        oldbottom=bottom;
-        top=y;
-        bottom = video_num_lines;
-        scrup();
-        top=oldtop;
+        oldtop=top; // 保存屏幕还没滚动时的开始行的行号
+        oldbottom=bottom; // 保存屏幕还没滚动时的结束行的行号
+        top=y;// 设置屏幕滚动的开始行为当前行
+        bottom = video_num_lines; // 设置屏幕滚动的结束行为屏幕最底下行
+        scrup(); // 屏幕窗口的内容上移一行
+        top=oldtop; // 恢复原来保存的top和bottom行号
         bottom=oldbottom;
 }
 
+/*
+ * 在当前光标处插入nr个空格字符，光标仍将处于第一个被插入的空格字符处
+ *
+ * nr: 插入的空格字符个数，默认为1
+ *
+ */
 static void csi_at(unsigned int nr)
 {
-        if (nr > video_num_columns)
+        if (nr > video_num_columns) // 如果插入的空格字符个数大于1行显示的字符个数，则截短为1行显示的字符个数 
                 nr = video_num_columns;
-        else if (!nr)
+        else if (!nr) // 如果nr == 0，则默认为插入1个空格字符
                 nr = 1;
-        while (nr--)
+        while (nr--) // 循环插入指定的空格字符
                 insert_char();
 }
 
+/*
+ * 在光标位置插入nr行
+ *
+ * nr: 插入的行数，默认为1
+ * 
+ */
 static void csi_L(unsigned int nr)
 {
-        if (nr > video_num_lines)
+        if (nr > video_num_lines) // 如果插入的行数个数大于屏幕显示行数，则截短为屏幕显示行数
                 nr = video_num_lines;
-        else if (!nr)
+        else if (!nr) // 如果nr == 0，则默认为插入1行
                 nr = 1;
-        while (nr--)
+        while (nr--) // 循环插入指定的行
                 insert_line();
 }
 
+/*
+ * 删除光标处的nr个字符
+ *
+ * nr: 删除的字符个数，默认为1
+ * 
+ */
 static void csi_P(unsigned int nr)
 {
-        if (nr > video_num_columns)
+        if (nr > video_num_columns) // 如果删除的字符个数大于1行显示的字符个数，则截短为1行显示字符个数
                 nr = video_num_columns;
-        else if (!nr)
+        else if (!nr) // 如果nr == 0，则默认为删除1个字符
                 nr = 1;
-        while (nr--)
+        while (nr--) // 循环删除指定的字符
                 delete_char();
 }
 
+/*
+ * 删除光标处的nr行
+ * 
+ * nr: 删除的行数，默认为1
+ *
+ */
 static void csi_M(unsigned int nr)
 {
-        if (nr > video_num_lines)
+        if (nr > video_num_lines) // 如果删除的行数个数大于屏幕显示行数，则截短为屏幕显示行数
                 nr = video_num_lines;
-        else if (!nr)
+        else if (!nr) // 如果nr == 0，则默认为删除1行
                 nr=1;
-        while (nr--)
+        while (nr--) // 循环删除指定的行
                 delete_line();
 }
 
 static int saved_x=0;
 static int saved_y=0;
 
+/*
+ * 临时保存当前光标的行号，列号
+ * 
+ */
 static void save_cur(void)
 {
         saved_x=x;
         saved_y=y;
 }
 
+/*
+ * 恢复临时保存的光标位置
+ * 
+ */
 static void restore_cur(void)
 {
         gotoxy(saved_x, saved_y);
