@@ -71,7 +71,7 @@
  */
 #define VIDEO_TYPE_MDA		0x10	/* Monochrome Text Display	*/ //单色文本
 #define VIDEO_TYPE_CGA		0x11	/* CGA Display 			*/ // CGA显示器
-#define VIDEO_TYPE_EGAM		0x20	/* EGA/VGA in Monochrome Mode	*/ // VGA显示器
+#define VIDEO_TYPE_EGAM		0x20	/* EGA/VGA in Monochrome Mode	*/ // VGA单色
 #define VIDEO_TYPE_EGAC		0x21	/* EGA/VGA in Color Mode	*/ // EGA/VGA彩色
 
 #define NPAR 16 // 转义字符序列中的最大参数个数
@@ -821,97 +821,137 @@ void con_write(struct tty_struct * tty)
  * Reads the information preserved by setup.s to determine the current display
  * type and sets everything accordingly.
  */
+
+/**
+ * 控制台终端初始化函数
+ *
+ * 读取setup.s保存的信息，用以确认显示器类型名，并且设置相关的参数。接着初始化键盘控制器中断，其他什么都不做
+ * 如果想让屏幕干净的话，就使用适当的转义字符序列来调用tty_write()函数
+ * 
+ */
 void con_init(void)
 {
         register unsigned char a;
         char *display_desc = "????";
         char *display_ptr;
 
-        video_num_columns = ORIG_VIDEO_COLS;
-        video_size_row = video_num_columns * 2;
-        video_num_lines = ORIG_VIDEO_LINES;
-        video_page = ORIG_VIDEO_PAGE;
-        video_erase_char = 0x0720;
-	
-        if (ORIG_VIDEO_MODE == 7)			/* Is this a monochrome display? */
+        // 用setup.s中保存的信息来初始化本文件使用的一些静态变量
+        video_num_columns = ORIG_VIDEO_COLS; // 显示器显示的字符列数
+        video_size_row = video_num_columns * 2; // 每行字符需要的字节数
+        video_num_lines = ORIG_VIDEO_LINES; // 显示器显示的行数
+        video_page = ORIG_VIDEO_PAGE; // 当前显示页面
+        video_erase_char = 0x0720; // 擦除字符（0x20是字符，0x07是属性）
+
+        // 根据显示模型是单色还是彩色，分别设置所使用的显存起始位置，以及显卡索引端口号和显卡数据端口号
+        if (ORIG_VIDEO_MODE == 7)			// BIOS显示方式 == 7 ：单色显卡模式
         {
-                video_mem_start = 0xb0000;
-                video_port_reg = 0x3b4;
-                video_port_val = 0x3b5;
-                if ((ORIG_VIDEO_EGA_BX & 0xff) != 0x10)
+                video_mem_start = 0xb0000; // 设置显存开始地址
+                video_port_reg = 0x3b4; // 设置显卡索引端口
+                video_port_val = 0x3b5; // 设置显卡数据端口
+
+                /*
+                 * 根据BIOS中断int 0x10功能0x12获得的显示模式信息，判断显卡是单色显卡还是彩色显卡
+                 *
+                 * 若使用上述中断功能所得到的BX寄存器返回的值不等于0x10: 则说明是EGA显卡。因此显示类型为EGAm
+                 * 虽然EGA显卡有较多的显存，但是在单色方式下仍然只能利用地址范围是 0xb0000~0xb8000
+                 *
+                 */
+                if ((ORIG_VIDEO_EGA_BX & 0xff) != 0x10) // EGA单色模式
                 {
-                        video_type = VIDEO_TYPE_EGAM;
-                        video_mem_end = 0xb8000;
-                        display_desc = "EGAm";
+                        video_type = VIDEO_TYPE_EGAM; // EGA单色显卡
+                        video_mem_end = 0xb8000; // 显存结束位置
+                        display_desc = "EGAm"; // 显卡描述字符串
                 }
-                else
+                else // 单色MDA显卡
                 {
-                        video_type = VIDEO_TYPE_MDA;
-                        video_mem_end	= 0xb2000;
-                        display_desc = "*MDA";
+                        video_type = VIDEO_TYPE_MDA; // MDA显卡
+                        video_mem_end	= 0xb2000; // 显存结束位置
+                        display_desc = "*MDA"; // 显卡描述字符串
                 }
         }
-        else								/* If not, it is color. */
+        else // 彩色显卡
         {
-                video_mem_start = 0xb8000;
-                video_port_reg	= 0x3d4;
-                video_port_val	= 0x3d5;
-                if ((ORIG_VIDEO_EGA_BX & 0xff) != 0x10)
+                video_mem_start = 0xb8000; // 显存开始位置
+                video_port_reg	= 0x3d4; // 显卡索引端口
+                video_port_val	= 0x3d5; // 显卡数据端口
+                
+                if ((ORIG_VIDEO_EGA_BX & 0xff) != 0x10) // 如果BX不等于0x10，说明是EGA显卡，有16KB显存可用
                 {
-                        video_type = VIDEO_TYPE_EGAC;
-                        video_mem_end = 0xbc000;
-                        display_desc = "EGAc";
+                        video_type = VIDEO_TYPE_EGAC; // EGA彩色模式
+                        video_mem_end = 0xbc000; // 显存结束位置
+                        display_desc = "EGAc"; // 显卡描述字符串
                 }
-                else
+                else // CGA显卡，只有8KB显存可用
                 {
-                        video_type = VIDEO_TYPE_CGA;
-                        video_mem_end = 0xba000;
-                        display_desc = "*CGA";
+                        video_type = VIDEO_TYPE_CGA; // CGA彩色模式
+                        video_mem_end = 0xba000; // 显存结束位置
+                        display_desc = "*CGA"; // 显卡描述字符串
                 }
         }
 
         /* Let the user known what kind of display driver we are using */
-	
-        display_ptr = ((char *)video_mem_start) + video_size_row - 8;
-        while (*display_desc)
+
+        // 在屏幕的右上脚展示”显卡描述字符串“
+        display_ptr = ((char *)video_mem_start) + video_size_row - 8; // display_ptr指向第一行倒数第四个字符的位置
+        while (*display_desc) // 复制显卡描述字符串到display_ptr指向的显存位置
         {
                 *display_ptr++ = *display_desc++;
                 display_ptr++;
         }
 	
         /* Initialize the variables used for scrolling (mostly EGA/VGA)	*/
-	
-        origin	= video_mem_start;
-        scr_end	= video_mem_start + video_num_lines * video_size_row;
-        top	= 0;
-        bottom	= video_num_lines;
 
-        gotoxy(ORIG_X,ORIG_Y);
-        set_trap_gate(0x21,&keyboard_interrupt);
-        outb_p(inb_p(0x21)&0xfd,0x21);
-        a=inb_p(0x61);
-        outb_p(a|0x80,0x61);
-        outb(a,0x61);
+        // 初始化用于滚动窗口的一些变量
+        origin	= video_mem_start; // 默认滚动窗口开始内存位置
+        scr_end	= video_mem_start + video_num_lines * video_size_row; // 滚动窗口末端内存位置
+        top	= 0; // 滚动窗口第一行
+        bottom	= video_num_lines; // 滚动窗口最后一行
+
+        gotoxy(ORIG_X,ORIG_Y); // 追踪光标到初始位置
+        
+        set_trap_gate(0x21,&keyboard_interrupt); // 设置键盘中断0x21的陷阱门描述符，处理过程为keyboard_interrupt例程（实现在keyboard.S中）
+        outb_p(inb_p(0x21)&0xfd,0x21); // 取消对键盘中断的屏蔽，允许IRQ1
+        // 复位键盘键盘控制器
+        a=inb_p(0x61); // 读取键盘端口0x61（8255A端口PB）
+        outb_p(a|0x80,0x61); // 禁止键盘工作（位7置位）
+        outb(a,0x61); // 再次允许键盘工作
 }
 /* from bsd-net-2: */
 
+/**
+ * 停止蜂鸣
+ * 
+ * 复位8255A FB端口的位1和0
+ * 
+ */
 void sysbeepstop(void)
 {
         /* disable counter 2 */
-        outb(inb_p(0x61)&0xFC, 0x61);
+        outb(inb_p(0x61)&0xFC, 0x61); // 禁止定时器2
 }
 
-int beepcount = 0;
+int beepcount = 0; //蜂鸣时间滴答计数
 
+
+/**
+ * 开通蜂鸣
+ *
+ * 8255A PB端口的位1用作扬声器的开门信号，位0用作8253定时器2的门信号，该定时器的输出脉冲送往扬声器，作为扬声器发声的频率
+ * 因此要使扬声器发声需要两步：
+ * 1. 开启 8255A PB端口的位1和位0
+ * 2. 设置定时器2通道发送一定的定时频率
+ * 
+ */
 static void sysbeep(void)
 {
         /* enable counter 2 */
-        outb_p(inb_p(0x61)|3, 0x61);
+        outb_p(inb_p(0x61)|3, 0x61); // 开启 8255A PB端口的位1和位0
         /* set command for counter 2, 2 byte write */
-        outb_p(0xB6, 0x43);
+        outb_p(0xB6, 0x43); // 0xB6: ”设置定时器2“的命令，0x43：定时器2芯片控制寄存器端口
         /* send 0x637 for 750 HZ */
-        outb_p(0x37, 0x42);
-        outb(0x06, 0x42);
+        // 发送0x637（代表750HZ）到定时器2芯片的数据寄存器端口0x42
+        outb_p(0x37, 0x42); // 0x37：0x637的低字节，0x42：定时器2芯片的数据寄存器端口
+        outb(0x06, 0x42); // 0x06：0x637的高字节，0x42：定时器2芯片的数据寄存器端口
         /* 1/8 second */
-        beepcount = HZ/8;	
+        beepcount = HZ/8; // 蜂鸣时间为100/8个滴答，每个滴答是10ms，所以蜂鸣时间为1000/8ms，也就是1/8s
 }
