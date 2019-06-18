@@ -649,71 +649,111 @@ static void restore_cur(void)
         gotoxy(saved_x, saved_y);
 }
 
+/**
+ * 控制台终端写函数
+ *
+ * tty: 当前控制台使用的tty结构指针
+ *
+ * 无返回
+ * 
+ * 从控制台终端对应的写缓冲队列取字符，针对每个字符进行分析：
+ * 如果字符是控制字符、转义或控制序列，则进行光标定位，字符删除等控制处理，对于普通字符则直接在光标处显示
+ * 
+ */
 void con_write(struct tty_struct * tty)
 {
         int nr;
         char c;
 
-        nr = CHARS(tty->write_q);
-        while (nr--) {
-                GETCH(tty->write_q,c);
-                switch(state) {
-                case 0:
-                        if (c>31 && c<127) {
-                                if (x>=video_num_columns) {
-                                        x -= video_num_columns;
-                                        pos -= video_size_row;
-                                        lf();
+        /*
+         * 获取控制台终端写队列中的字符数nr，并循环取出每个字符进行处理：
+         * 如果控制台由于收到键盘或程序发出的暂停命令（如按键Ctrl-S）而处于停止状态，那么本函数就停止处理写队列中的字符，退出本函数
+         * 另外，如果取出的是控制字符CAN(24)或SUB(26)，并且在转义或控制序列期间收到，则序列不会执行而立刻终止，同时显示随后的字符
+         *
+         * 注意：con_write只处理取队列字符时写队列当前含有的字符，而当一个序列正被放到写队列期间如果触发con_write，
+         * 则本函数退出的时候state就处于处理转义或控制序列的其他状态上！！！
+         * 
+         */
+        nr = CHARS(tty->write_q); // 获取控制台终端写队列的字符数
+        while (nr--) { // 循环读取
+                GETCH(tty->write_q,c); // 从写队列缓冲区取走一个字符，赋值给c变量
+                switch(state) { // 根据当前状态对取到的字符进行相关处理
+                        /*
+                         * 初始正常状态，此时若接受到的是普通字符，则把字符直接显示在屏幕上
+                         *
+                         * 如果是控制字符（如回车字符），则对光标进行设置
+                         * 当处理完一个转义或控制序列，程序也会回到此状态
+                         * 
+                         */
+                case 0: 
+                        if (c>31 && c<127) { // 普通可显示的字符
+                                if (x>=video_num_columns) { // 光标处于本行最后一列：需要换行
+                                        x -= video_num_columns; // 当前光标的列数回到头列
+                                        pos -= video_size_row; // 当前光标对应的内存位置减去一行字符所占用的字节
+                                        lf(); // 光标向下移动一行
                                 }
                                 __asm__("movb attr,%%ah\n\t"
                                         "movw %%ax,%1\n\t"
                                         ::"a" (c),"m" (*(short *)pos)
-                                        );
-                                pos += 2;
-                                x++;
-                        } else if (c==27)
-                                state=1;
-                        else if (c==10 || c==11 || c==12)
-                                lf();
-                        else if (c==13)
-                                cr();
-                        else if (c==ERASE_CHAR(tty))
-                                del();
-                        else if (c==8) {
-                                if (x) {
-                                        x--;
-                                        pos -= 2;
+                                        ); // 把获取的字符写入当前光标位置
+                                pos += 2; // 当前光标的内存位置增加2字节
+                                x++; // 列数增1：也就是光标向右移一列
+                        } else if (c==27) // c是转义字符'Esc'
+                                state=1; // 转换状态state到1（处理转义序列）
+                        else if (c==10 || c==11 || c==12) // c是换行符LF(10) 或 垂直制表符VT(11) 或 换页符FF(12)
+                                lf(); // 光标移动到下一行
+                        else if (c==13) // c是回车符CR(13)
+                                cr(); // 光标回到左边第一列
+                        else if (c==ERASE_CHAR(tty)) // c是擦除字符DEL(127)
+                                del(); // 光标左边的字符擦除（用空格替换），并将光标移动到被擦除的位置
+                        else if (c==8) { // c是BS(Backspace 8), 光标左移一列
+                                if (x) { // 当前光标不在首列
+                                        x--; // 列数减1：左移一列
+                                        pos -= 2; // 当前光标在内存中地址减2字节（一个字符）
                                 }
-                        } else if (c==9) {
-                                c=8-(x&7);
-                                x += c;
-                                pos += c<<1;
-                                if (x>video_num_columns) {
+                        } else if (c==9) { // c是水平制表符HT（9）
+                                c=8-(x&7); // 计算要移动的列数
+                                x += c; // 调整当前光标的列数：把光标移动到8的倍数列上
+                                pos += c<<1; // 当前内存地址相应调整
+                                if (x>video_num_columns) { // 如果列数超出一行能显示的数量，则跳转到下一行
                                         x -= video_num_columns;
                                         pos -= video_size_row;
                                         lf();
                                 }
-                                c=9;
-                        } else if (c==7)
-                                sysbeep();
+                                c=9; // 恢复c原来的值为水平制表符HT
+                        } else if (c==7) // c是响铃符BEL(7)
+                                sysbeep(); // 发出蜂鸣
                         break;
+                        
+                        /*
+                         * 接受到转义序列引导字符'Esc'(0x1b=033=27)
+                         * 
+                         * 如果在此状态接收到一个字符'['：则说明是控制序列，跳转到state=2去处理
+                         * 否则就把接收到字符作为转义序列来处理
+                         * 
+                         */
                 case 1:
-                        state=0;
-                        if (c=='[')
-                                state=2;
-                        else if (c=='E')
-                                gotoxy(0,y+1);
-                        else if (c=='M')
-                                ri();
-                        else if (c=='D')
-                                lf();
-                        else if (c=='Z')
-                                respond(tty);
-                        else if (x=='7')
-                                save_cur();
-                        else if (x=='8')
-                                restore_cur();
+                        state=0; // 处理完转义序列后状态恢复为”初始显示“
+                        if (c=='[') // 如果字符是'['：说明是控制序列
+                                state=2; // 转换状态为”开始控制序列处理“
+                        else if (c=='E') // Esc E 
+                                gotoxy(0,y+1); // 光标下移一行，回到0列
+                        else if (c=='M') // Esc M 
+                                ri(); // 光标上移一行
+                        else if (c=='D') // Esc D 
+                                lf(); // 光标下移一行
+                        else if (c=='Z') // Esc Z 
+                                respond(tty); // 设备属性查询
+                        else if (x=='7') // Esc 7 
+                                save_cur(); // 保存光标位置
+                        else if (x=='8') // Esc 8 
+                                restore_cur(); // 恢复保存的光标位置
                         break;
+                        
+                        /*
+                         * 已经接受到一个控制序列引导符'Esc ['，执行参数数组par[]的清零工作后，转向state=3处理
+                         * 
+                         */
                 case 2:
                         for(npar=0;npar<NPAR;npar++)
                                 par[npar]=0;
@@ -721,6 +761,15 @@ void con_write(struct tty_struct * tty)
                         state=3;
                         if ((ques=(c=='?')))
                                 break;
+
+                        /*
+                         * 开始接收控制序列的参数值
+                         *
+                         * 如果接收到的一个分号';'：维持本状态，并把接收到的数值放入par[]数组中的下一项
+                         * 如果接收到的是数字字符：参数值用十进制数表示，把接受到的数字字符转换成数值放入par[]数组中
+                         * 如果接收到即不是一个分号，也不是数字：说明控制序列字符已经全部放入par[]中，转向state=4处理
+                         * 
+                         */
                 case 3:
                         if (c==';' && npar<NPAR-1) {
                                 npar++;
@@ -729,6 +778,11 @@ void con_write(struct tty_struct * tty)
                                 par[npar]=10*par[npar]+c-'0';
                                 break;
                         } else state=4;
+
+                        /*
+                         * 已经接收到一个完整的控制序列：根据本状态接受到的结尾字符对相应控制序列进行处理
+                         * 
+                         */
                 case 4:
                         state=0;
                         switch(c) {
