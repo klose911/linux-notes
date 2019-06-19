@@ -751,15 +751,16 @@ void con_write(struct tty_struct * tty)
                         break;
                         
                         /*
-                         * 已经接受到一个控制序列引导符'Esc ['，执行参数数组par[]的清零工作后，转向state=3处理
+                         * 已经接收到一个控制序列引导符'Esc ['，执行参数数组par[]的清零工作后，转向state=3处理
                          * 
                          */
                 case 2:
-                        for(npar=0;npar<NPAR;npar++)
-                                par[npar]=0;
+                        for(npar=0;npar<NPAR;npar++) // 初始化参数数组par[]
+                                par[npar]=0; 
                         npar=0;
-                        state=3;
-                        if ((ques=(c=='?')))
+                        state=3; // 转到状态3处执行
+                        // 如果下一个接受到的字符是'?'：说明这是一个终端私有序列，后面会有一个功能字符，然后才转到state=3处取执行
+                        if ((ques=(c=='?'))) 
                                 break;
 
                         /*
@@ -771,98 +772,118 @@ void con_write(struct tty_struct * tty)
                          * 
                          */
                 case 3:
-                        if (c==';' && npar<NPAR-1) {
-                                npar++;
+                        if (c==';' && npar<NPAR-1) { // 接收到的一个分号';'
+                                npar++; // 
                                 break;
-                        } else if (c>='0' && c<='9') {
-                                par[npar]=10*par[npar]+c-'0';
+                        } else if (c>='0' && c<='9') { // 接收到的数字字符
+                                par[npar]=10*par[npar]+c-'0'; // 转换数字字符为十进制数值：‘1’ -> 1 
                                 break;
-                        } else state=4;
+                        } else state=4; // 即不是一个分号，也不是数字：转向状态4处理
 
                         /*
                          * 已经接收到一个完整的控制序列：根据本状态接受到的结尾字符对相应控制序列进行处理
                          * 
                          */
                 case 4:
-                        state=0;
+                        state=0; // 执行完控制序列，状态恢复为“初始显示”
                         switch(c) {
-                        case 'G': case '`':
-                                if (par[0]) par[0]--;
+                                // CSI Pn G - 光标水平移动
+                        case 'G': case '`': // 如果c是'G'或'`'：par[]中第一个参数代表移动到的列号
+                                if (par[0]) par[0]--; // 列号不为0，光标左移一列
                                 gotoxy(par[0],y);
                                 break;
-                        case 'A':
-                                if (!par[0]) par[0]++;
-                                gotoxy(x,y-par[0]);
+                                // CSI Pn A - 光标上移
+                        case 'A': // 如果c是'A'：par[]中第一个参数代表光标上移的行数 
+                                if (!par[0]) par[0]++; // 若参数为0，光标上移一行
+                                gotoxy(x,y-par[0]); // 光标上移若干行
                                 break;
-                        case 'B': case 'e':
-                                if (!par[0]) par[0]++;
-                                gotoxy(x,y+par[0]);
+                                // CSI Pn B - 光标下移
+                        case 'B': case 'e': // 如果c是'B'或'e'：par[]中第一个参数代表下移的行数
+                                if (!par[0]) par[0]++; // 若参数为0，光标下移一行
+                                gotoxy(x,y+par[0]); // 光标下移若干行
                                 break;
-                        case 'C': case 'a':
-                                if (!par[0]) par[0]++;
-                                gotoxy(x+par[0],y);
+                                // CSI Pn C - 光标右移
+                        case 'C': case 'a': // 如果c是'C'或'a'：par[]中第一个参数代表右移的列数
+                                if (!par[0]) par[0]++; // 若参数为0，光标右移一列
+                                gotoxy(x+par[0],y); // 光标右移若干列
                                 break;
-                        case 'D':
-                                if (!par[0]) par[0]++;
-                                gotoxy(x-par[0],y);
+                                // CSI Pn D - 光标左移
+                        case 'D': // 如果c是'D'：par[]中第一个参数代表左移的列数
+                                if (!par[0]) par[0]++; // 若参数为0，光标左移一列
+                                gotoxy(x-par[0],y); // 光标左移若干列
                                 break;
-                        case 'E':
-                                if (!par[0]) par[0]++;
-                                gotoxy(0,y+par[0]);
+                                // CSI Pn E - 光标下移回0列
+                        case 'E': // 如果c是'D'：par[]中第一个参数代表下移的行数
+                                if (!par[0]) par[0]++; // 若参数为0，光标下移一行
+                                gotoxy(0,y+par[0]); // 光标下移若干行，并回到0列
                                 break;
-                        case 'F':
-                                if (!par[0]) par[0]++;
-                                gotoxy(0,y-par[0]);
+                                // CSI Pn F - 光标上移回0列
+                        case 'F': // 如果c是'D'：par[]中第一个参数代表下移的行数
+                                if (!par[0]) par[0]++; // 若参数为0，光标上移一行
+                                gotoxy(0,y-par[0]); // 光标上移若干行，并回到0列
                                 break;
-                        case 'd':
-                                if (par[0]) par[0]--;
-                                gotoxy(x,par[0]);
+                                // CSI Pn d - 在当前列置行位置
+                        case 'd': // 如果c是'd': par[]中第一个参数代表行号
+                                if (par[0]) par[0]--; // 行号从0开始计数，所以需要减1
+                                gotoxy(x,par[0]); // 移动到指定行
                                 break;
-                        case 'H': case 'f':
-                                if (par[0]) par[0]--;
+                                // CSI Pn H - 光标定位
+                        case 'H': case 'f': // 如果c是'H'或'f'：第一个参数代表行号，第二个参数代表列号
+                                if (par[0]) par[0]--; 
                                 if (par[1]) par[1]--;
-                                gotoxy(par[1],par[0]);
+                                gotoxy(par[1],par[0]); // 移动到指定的位置
                                 break;
-                        case 'J':
+                                // CSI Pn J - 屏幕擦除字符
+                        case 'J': // 如果c是'J'：第一个参数代表光标所处位置清屏的方式
                                 csi_J(par[0]);
                                 break;
-                        case 'K':
+                                // CSI Pn K - 行擦除字符
+                        case 'K': // 如果c是'K'：第一个参数代表光标所处位置行内擦除字符的方式
                                 csi_K(par[0]);
                                 break;
-                        case 'L':
+                                // CSI Pn L - 插入行
+                        case 'L': // 如果c是'L'：第一个参数代表插入的行数
                                 csi_L(par[0]);
                                 break;
-                        case 'M':
+                                // CSI Pn M - 删除行
+                        case 'M': // 如果c是'M'：第一个参数代表删除的行数
                                 csi_M(par[0]);
                                 break;
-                        case 'P':
+                                // CSI Pn P - 删除字符
+                        case 'P': // 如果c是'M'：第一个参数代表删除的字符数
                                 csi_P(par[0]);
                                 break;
-                        case '@':
+                                // CSI Pn @ - 插入字符
+                        case '@': // 如果c是'@'：第一个参数代表插入的空格字符数
                                 csi_at(par[0]);
                                 break;
-                        case 'm':
+                                // CSI Pn m - 设置显示字符属性
+                        case 'm': // 如果c是'm'：第一个参数代表要设置的显示字符的属性值
                                 csi_m();
                                 break;
-                        case 'r':
-                                if (par[0]) par[0]--;
-                                if (!par[1]) par[1] = video_num_lines;
+                                // CSI Pn r - 设置滚屏上下界
+                        case 'r': // 如果c是'r'或'f'：第一个参数代表滚屏的起始行号，第二个参数代表滚屏的终止行号
+                                if (par[0]) par[0]--; // 如果起始行号不等于0, 减1
+                                if (!par[1]) par[1] = video_num_lines; // 如果终止行号为0, 默认为可显示行号的最大值
+                                // 设置滚屏的起始和终止行号
                                 if (par[0] < par[1] &&
                                     par[1] <= video_num_lines) {
                                         top=par[0];
                                         bottom=par[1];
                                 }
                                 break;
-                        case 's':
+                                // CSI Pn s - 保存当前光标位置
+                        case 's': 
                                 save_cur();
                                 break;
+                                // CSI Pn u - 恢复保存的光标位置
                         case 'u':
                                 restore_cur();
                                 break;
                         }
                 }
         }
-        set_cursor();
+        set_cursor(); // 根据上面设置的光标位置，设置显示控制器中当前光标的位置
 }
 
 /*
