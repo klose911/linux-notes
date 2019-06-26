@@ -163,18 +163,18 @@ read_char:
 	// 由于设置了发送保存寄存器允许此中断标志，说明对应的串行终端写缓存队列中有字符需要发送
 .align 2
 write_char:
-	movl 4(%ecx),%ecx		# write-queue // 取写缓冲队列结构地址 -> ecx 
+	movl 4(%ecx),%ecx		# write-queue # 取写缓冲队列结构地址 -> ecx 
 	movl head(%ecx),%ebx # 取写队列头指针 -> ebx 
 	subl tail(%ecx),%ebx # 计算尾指针 - 头指针 -> ebx
-	andl $size-1,%ebx		# nr chars in queue // size -1 & ebx：如果结果为0，则“尾指针==头指针”，因此写队列为空
+	andl $size-1,%ebx		# nr chars in queue # size -1 & ebx：如果结果为0，则“尾指针==头指针”，因此写队列为空
 	je write_buffer_empty # 写队列为空，跳转到write_buffer_empty处理
 	cmpl $startup,%ebx # 比较队列中字符是否超过256个
 	ja 1f # 超过256个字符，跳转到标号1执行
-	movl proc_list(%ecx),%ebx	# wake up sleeping process // 等待终端的进程结构指针地址 -> ebx：少于256个字符，唤醒写终端的进程！
-	testl %ebx,%ebx			# is there any? // 测试是否存在等待终端写的进程
+	movl proc_list(%ecx),%ebx	# wake up sleeping process # 等待终端的进程结构指针地址 -> ebx：少于256个字符，唤醒写终端的进程！
+	testl %ebx,%ebx			# is there any? # 测试是否存在等待终端写的进程
 	je 1f # 没有等待终端写的进程，跳转到标号1处执行
 	movl $0,(%ebx) # 设置等待进程的状态为可执行状态(0)，注意：可执行状态是进程结构的第一个字段，因此可以用(%ebx)来表示
-	// 这段逻辑可以和GETCH宏做比较
+	# 这段逻辑可以和GETCH宏做比较
 1:	movl tail(%ecx),%ebx # 取尾指针 -> ebx 
 	movb buf(%ecx,%ebx),%al # 从写队列的数据缓冲区取一个字符 -> al 
 	outb %al,%dx # 发送要写的字符到发送保存寄存器（端口0x3f8或0x2f8）
@@ -193,11 +193,11 @@ write_buffer_empty:
 	movl proc_list(%ecx),%ebx	# wake up sleeping process
 	testl %ebx,%ebx			# is there any?
 	je 1f
-	movl $0,(%ebx) // 这段逻辑和上面一样
-1:	incl %edx // 串行端口基地址 + 1 : 中断允许寄存器IER(0x3f9或0x2f9)
-	inb %dx,%al　// 读取中断允许寄存器的状态字 -> al 
-	jmp 1f　// 空指令
-1:	jmp 1f // 空指令
-1:	andb $0xd,%al	// 位1设置为0：禁止发送保存寄存器THR空时发出中断　/* disable transmit interrupt */
-	outb %al,%dx // 写入中断允许寄存器IER
+	movl $0,(%ebx) #这段逻辑和上面一样
+1:	incl %edx # 串行端口基地址 + 1 : 中断允许寄存器IER(0x3f9或0x2f9)
+	inb %dx,%al #读取中断允许寄存器的状态字 -> al 
+	jmp 1f # 空指令
+1:	jmp 1f # 空指令
+1:	andb $0xd,%al # 位1设置为0：禁止发送保存寄存器THR空时发出中断　/* disable transmit interrupt */
+	outb %al,%dx # 写入中断允许寄存器IER
 	ret
