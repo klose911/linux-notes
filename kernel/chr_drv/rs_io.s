@@ -124,18 +124,21 @@ end:	movb $0x20,%al # 中断控制器端口0x20
 jmp_table:
 	.long modem_status,write_char,read_char,line_status
 
+	// modem状态变化
 .align 2
 modem_status:
 	addl $6,%edx		/* clear intr by reading modem status reg */ # [0x3f8 + 0x6 = 0x3fe] modem状态寄存器MSR(0x3fe或0x2fe)
 	inb %dx,%al # 通过读MSR寄存器来进行modem复位操作
 	ret
 
+	// 线路状态出错
 .align 2
 line_status:
 	addl $5,%edx		/* clear intr by reading line status reg. */ # [0x3f8 + 0x5 = 0x3fd] 读线路状态寄存器LSR  
 	inb %dx,%al # 通过读LSR寄存器来进行读线路复位操作
 	ret
 
+	// 从串口的接收缓存寄存器中读字符
 .align 2
 read_char:
 	inb %dx,%al # 读取接收缓冲寄存器RBR中的字符 -> al 
@@ -156,38 +159,45 @@ read_char:
 	addl $4,%esp # 丢弃入栈参数
 	ret # 返回到rep_int处
 
+	// 从写缓冲队列中写字符到串口发送寄存器：
+	// 由于设置了发送保存寄存器允许此中断标志，说明对应的串行终端写缓存队列中有字符需要发送
 .align 2
 write_char:
-	movl 4(%ecx),%ecx		# write-queue
-	movl head(%ecx),%ebx
-	subl tail(%ecx),%ebx
-	andl $size-1,%ebx		# nr chars in queue
-	je write_buffer_empty
-	cmpl $startup,%ebx
-	ja 1f
-	movl proc_list(%ecx),%ebx	# wake up sleeping process
-	testl %ebx,%ebx			# is there any?
-	je 1f
-	movl $0,(%ebx)
-1:	movl tail(%ecx),%ebx
-	movb buf(%ecx,%ebx),%al
-	outb %al,%dx
-	incl %ebx
-	andl $size-1,%ebx
-	movl %ebx,tail(%ecx)
-	cmpl head(%ecx),%ebx
-	je write_buffer_empty
+	movl 4(%ecx),%ecx		# write-queue // 取写缓冲队列结构地址 -> ecx 
+	movl head(%ecx),%ebx # 取写队列头指针 -> ebx 
+	subl tail(%ecx),%ebx # 计算尾指针 - 头指针 -> ebx
+	andl $size-1,%ebx		# nr chars in queue // size -1 & ebx：如果结果为0，则“尾指针==头指针”，因此写队列为空
+	je write_buffer_empty # 写队列为空，跳转到write_buffer_empty处理
+	cmpl $startup,%ebx # 比较队列中字符是否超过256个
+	ja 1f # 超过256个字符，跳转到标号1执行
+	movl proc_list(%ecx),%ebx	# wake up sleeping process // 等待终端的进程结构指针地址 -> ebx：少于256个字符，唤醒写终端的进程！
+	testl %ebx,%ebx			# is there any? // 测试是否存在等待终端写的进程
+	je 1f # 没有等待终端写的进程，跳转到标号1处执行
+	movl $0,(%ebx) # 设置等待进程的状态为可执行状态(0)，注意：可执行状态是进程结构的第一个字段，因此可以用(%ebx)来表示
+	// 这段逻辑可以和GETCH宏做比较
+1:	movl tail(%ecx),%ebx # 取尾指针 -> ebx 
+	movb buf(%ecx,%ebx),%al # 从写队列的数据缓冲区取一个字符 -> al 
+	outb %al,%dx # 发送要写的字符到发送保存寄存器（端口0x3f8或0x2f8）
+	incl %ebx # 尾指针 + 1
+	andl $size-1,%ebx # size - 1 & 尾指针 -> ebx 
+	movl %ebx,tail(%ecx) # 保存已经修改过的尾指针
+	cmpl head(%ecx),%ebx # 再次比较头指针和修改过的尾指针
+	je write_buffer_empty # 如果两者相同，则跳转到write_buffer_empty（处理写队列为空的情况）
 	ret
+	
+	// 写队列为空：
+	// 1. 唤醒等待终端写的进程
+	// 2. 暂时禁止发送保存寄存器THR空时发出中断
 .align 2
 write_buffer_empty:
 	movl proc_list(%ecx),%ebx	# wake up sleeping process
 	testl %ebx,%ebx			# is there any?
 	je 1f
-	movl $0,(%ebx)
-1:	incl %edx
-	inb %dx,%al
-	jmp 1f
-1:	jmp 1f
-1:	andb $0xd,%al		/* disable transmit interrupt */
-	outb %al,%dx
+	movl $0,(%ebx) // 这段逻辑和上面一样
+1:	incl %edx // 串行端口基地址 + 1 : 中断允许寄存器IER(0x3f9或0x2f9)
+	inb %dx,%al　// 读取中断允许寄存器的状态字 -> al 
+	jmp 1f　// 空指令
+1:	jmp 1f // 空指令
+1:	andb $0xd,%al	// 位1设置为0：禁止发送保存寄存器THR空时发出中断　/* disable transmit interrupt */
+	outb %al,%dx // 写入中断允许寄存器IER
 	ret
