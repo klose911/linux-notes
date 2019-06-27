@@ -10,96 +10,124 @@
  *
  * Kill-line thanks to John T Kohl.
  */
+
+/**
+ * 终端读写接口
+ * 
+ */
 #include <ctype.h>
 #include <errno.h>
 #include <signal.h>
 
-#define ALRMMASK (1<<(SIGALRM-1))
-#define KILLMASK (1<<(SIGKILL-1))
-#define INTMASK (1<<(SIGINT-1))
-#define QUITMASK (1<<(SIGQUIT-1))
-#define TSTPMASK (1<<(SIGTSTP-1))
+#define ALRMMASK (1<<(SIGALRM-1)) // Alarm信号在信号位图中对应的位屏蔽位
+#define KILLMASK (1<<(SIGKILL-1)) // Kill信号在信号位图中对应的位屏蔽位
+#define INTMASK (1<<(SIGINT-1)) // Interrupt信号在信号位图中对应的位屏蔽位
+#define QUITMASK (1<<(SIGQUIT-1)) // Quit信号在信号位图中对应的位屏蔽位
+#define TSTPMASK (1<<(SIGTSTP-1)) // TTY Stop信号在信号位图中对应的位屏蔽位
 
 #include <linux/sched.h>
 #include <linux/tty.h>
 #include <asm/segment.h>
 #include <asm/system.h>
 
-#define _L_FLAG(tty,f)	((tty)->termios.c_lflag & f)
-#define _I_FLAG(tty,f)	((tty)->termios.c_iflag & f)
-#define _O_FLAG(tty,f)	((tty)->termios.c_oflag & f)
+// 获取terminos结构中三个模式标志集之一，或者用于判断一个标志集是否有置位标志
+#define _L_FLAG(tty,f)	((tty)->termios.c_lflag & f) // 本地模式标志
+#define _I_FLAG(tty,f)	((tty)->termios.c_iflag & f) // 输入模式标志
+#define _O_FLAG(tty,f)	((tty)->termios.c_oflag & f) // 输出模式标志
 
-#define L_CANON(tty)	_L_FLAG((tty),ICANON)
-#define L_ISIG(tty)	_L_FLAG((tty),ISIG)
-#define L_ECHO(tty)	_L_FLAG((tty),ECHO)
-#define L_ECHOE(tty)	_L_FLAG((tty),ECHOE)
-#define L_ECHOK(tty)	_L_FLAG((tty),ECHOK)
-#define L_ECHOCTL(tty)	_L_FLAG((tty),ECHOCTL)
-#define L_ECHOKE(tty)	_L_FLAG((tty),ECHOKE)
+#define L_CANON(tty)	_L_FLAG((tty),ICANON) // 是否开启规范模式
+#define L_ISIG(tty)	_L_FLAG((tty),ISIG) // 是否相应信号
+#define L_ECHO(tty)	_L_FLAG((tty),ECHO) // 是否回显字符
+#define L_ECHOE(tty)	_L_FLAG((tty),ECHOE) // 规范模式时候回显是否需要擦除
+#define L_ECHOK(tty)	_L_FLAG((tty),ECHOK) // 规范模式时候回显是否擦除行
+#define L_ECHOCTL(tty)	_L_FLAG((tty),ECHOCTL) // 回显是否显示控制字符
+#define L_ECHOKE(tty)	_L_FLAG((tty),ECHOKE) // 是否显示被KILL擦除行的字符
 
-#define I_UCLC(tty)	_I_FLAG((tty),IUCLC)
-#define I_NLCR(tty)	_I_FLAG((tty),INLCR)
-#define I_CRNL(tty)	_I_FLAG((tty),ICRNL)
-#define I_NOCR(tty)	_I_FLAG((tty),IGNCR)
+#define I_UCLC(tty)	_I_FLAG((tty),IUCLC) // 是否把输入的大写字符转换成小写
+#define I_NLCR(tty)	_I_FLAG((tty),INLCR) // 是否把输入的换行符NL转换成回车符CR 
+#define I_CRNL(tty)	_I_FLAG((tty),ICRNL) // 是否把输入的回车符CR转换成换行符NL
+#define I_NOCR(tty)	_I_FLAG((tty),IGNCR) // 是否忽略输入的回车符CR
 
-#define O_POST(tty)	_O_FLAG((tty),OPOST)
-#define O_NLCR(tty)	_O_FLAG((tty),ONLCR)
-#define O_CRNL(tty)	_O_FLAG((tty),OCRNL)
-#define O_NLRET(tty)	_O_FLAG((tty),ONLRET)
-#define O_LCUC(tty)	_O_FLAG((tty),OLCUC)
+#define O_POST(tty)	_O_FLAG((tty),OPOST) // 是否执行输出处理
+#define O_NLCR(tty)	_O_FLAG((tty),ONLCR) // 是否把换行符NL转换成回车符CR输出
+#define O_CRNL(tty)	_O_FLAG((tty),OCRNL) // 是否把回车符CR转换成换行符NL输出
+#define O_NLRET(tty)	_O_FLAG((tty),ONLRET) // 换行符NL是否执行回车的功能
+#define O_LCUC(tty)	_O_FLAG((tty),OLCUC) // 输出时是否把小写字符转换成大写字符
 
-        struct tty_struct tty_table[] = {
-                {
-                        {ICRNL,		/* change incoming CR to NL */
-                         OPOST|ONLCR,	/* change outgoing NL to CRNL */
-                         0,
-                         ISIG | ICANON | ECHO | ECHOCTL | ECHOKE,
-                         0,		/* console termio */
-                         INIT_C_CC},
-                        0,			/* initial pgrp */
-                        0,			/* initial stopped */
-                        con_write,
-                        {0,0,0,0,""},		/* console read-queue */
-                        {0,0,0,0,""},		/* console write-queue */
-                        {0,0,0,0,""}		/* console secondary queue */
-                },{
-                        {0, /* no translation */
-                         0,  /* no translation */
-                         B2400 | CS8,
-                         0,
-                         0,
-                         INIT_C_CC},
-                        0,
-                        0,
-                        rs_write,
-                        {0x3f8,0,0,0,""},		/* rs 1 */
-                        {0x3f8,0,0,0,""},
-                        {0,0,0,0,""}
-                },{
-                        {0, /* no translation */
-                         0,  /* no translation */
-                         B2400 | CS8,
-                         0,
-                         0,
-                         INIT_C_CC},
-                        0,
-                        0,
-                        rs_write,
-                        {0x2f8,0,0,0,""},		/* rs 2 */
-                        {0x2f8,0,0,0,""},
-                        {0,0,0,0,""}
-                }
-        };
+
+/**
+ * 终端结构表数组
+ *
+ * 这里总共有3个数据项，分别代表了console控制台终端，rs1串行口1终端，rs2串行口2终端
+ * 
+ */
+struct tty_struct tty_table[] = {
+        // 控制台终端
+        {
+                // 终端属性
+                {ICRNL,		// 输入时把回车符CR转换成换行符NL 
+                 OPOST|ONLCR,	 // 把换行符NL作为回车符CR输出，并且执行输出处理
+                 0, // 控制模式为NULL（没有波特率等传输信息）
+                 ISIG | ICANON | ECHO | ECHOCTL | ECHOKE, // 本地模式标志: 相应信号，规范模式，回显字符，回显字符中显示控制字符，回显模式显示被擦除行的字符
+                 0, // 线路模式为NULL 
+                 INIT_C_CC}, // 标准控制字符数组
+                0, // 初始进程组为0
+                0,	// 初始停止标志为0
+                con_write, // 写控制终端函数指针为con_write(console.c中)
+                {0,0,0,0,""},	//控制台终端读缓冲队列（含有0个字符，头指针偏移为0, 尾指针偏移为0, 等待进程队列为NULL）
+                {0,0,0,0,""},	//控制台终端写缓冲队列（含有0个字符，头指针偏移为0, 尾指针偏移为0, 等待进程队列为NULL）	
+                {0,0,0,0,""}	//控制台终端辅助缓冲队列（含有0个字符，头指针偏移为0, 尾指针偏移为0, 等待进程队列为NULL）	
+        },
+        // 串行口1终端
+        {
+                // 终端属性
+                {0, // 输入不做转换
+                 0,  // 输出不做转换
+                 B2400 | CS8, // 控制模式：波特率2400，每个字符8位（1个字节）
+                 0, // 本地模式为NULL
+                 0, // 线路模式为NULL 
+                 INIT_C_CC}, // 标准控制字符数组
+                0, // 初始进程组为0
+                0, // 初始停止标志为0
+                rs_write, // 串行中断写函数指针rs_write(serial.c中)
+                {0x3f8,0,0,0,""},	// 串行口1终端读缓冲队列（串行口1寄存器端口基地址0x3f8，头指针偏移为0, 尾指针偏移为0, 等待进程队列为NULL）
+                {0x3f8,0,0,0,""}, // 串行口1终端写缓冲队列（串行口1寄存器端口基地址0x3f8，头指针偏移为0, 尾指针偏移为0, 等待进程队列为NULL）
+                {0,0,0,0,""} // 串行口1终端辅助缓冲队列（含有0个字符，头指针偏移为0, 尾指针偏移为0, 等待进程队列为NULL）
+        },
+        // 串行口2终端：除了串行口2的端口基地址(0x2f8)不同，其余和上面串行口1类似
+        {
+                {0, /* no translation */
+                 0,  /* no translation */
+                 B2400 | CS8,
+                 0,
+                 0,
+                 INIT_C_CC},
+                0,
+                0,
+                rs_write,
+                {0x2f8,0,0,0,""},		/* rs 2 */
+                {0x2f8,0,0,0,""},
+                {0,0,0,0,""}
+        }
+};
 
 /*
  * these are the tables used by the machine code handlers.
  * you can implement pseudo-tty's or something by changing
  * them. Currently not done.
  */
+
+/**
+ * 
+ * 汇编程序(rs_io.s)中使用的终端读写缓冲队列结构指针地址表
+ *
+ * 通过修改这张被可以实现伪终端。现在还没有完成
+ * 
+ */
 struct tty_queue * table_list[]={
-        &tty_table[0].read_q, &tty_table[0].write_q,
-        &tty_table[1].read_q, &tty_table[1].write_q,
-        &tty_table[2].read_q, &tty_table[2].write_q
+        &tty_table[0].read_q, &tty_table[0].write_q, // 控制台终端的读写队列指针
+        &tty_table[1].read_q, &tty_table[1].write_q, // 串行口1终端的读写队列指针
+        &tty_table[2].read_q, &tty_table[2].write_q  // 串行口2终端的读写队列指针
 };
 
 void tty_init(void)
