@@ -211,6 +211,7 @@ void wait_for_keypress(void)
  * 无返回
  * 
  * 根据termios设置的各种标志，将指定tty终端读队列缓冲区的字符复制转换成规范（熟）模式字符序列，并放入辅助队列的缓冲区中
+ * 注意：如果开启回显模式，不仅写入辅助队列的规范模式的，而是同时也会写入到该终端的写队列，再通过调用tty_write()函数显示在控制台或由串行口发送出去
  * 
  */
 void copy_to_cooked(struct tty_struct * tty)
