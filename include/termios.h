@@ -130,7 +130,7 @@ struct termios {
 #define VKILL 3 // KILL (^U) \025 终止字符（删除行） 
 #define VEOF 4 // EOF (^D) \004 文件结束字符
 #define VTIME 5 // TIME (\0) \0 定时器值
-#define VMIN 6 // MIN (\1) \1 定时器值
+#define VMIN 6 // MIN (\1) \1 至少读取的字符个数
 #define VSWTC 7 // SWTC (\0) \0 交换字符
 #define VSTART 8 // START (^Q) \021 开始字符
 #define VSTOP 9 // STOP (^S) \023 停止字符

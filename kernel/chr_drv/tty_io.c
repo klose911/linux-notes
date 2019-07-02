@@ -61,55 +61,55 @@
  * 这里总共有3个数据项，分别代表了console控制台终端，rs1串行口1终端，rs2串行口2终端
  * 
  */
-        struct tty_struct tty_table[] = {
-                // 控制台终端
-                {
-                        // 终端属性
-                        {ICRNL,		// 输入时把回车符CR转换成换行符NL 
-                         OPOST|ONLCR,	 // 把换行符NL作为回车符CR输出，并且执行输出处理
-                         0, // 控制模式为NULL（没有波特率等传输信息）
-                         ISIG | ICANON | ECHO | ECHOCTL | ECHOKE, // 本地模式标志: 相应信号，规范模式，回显字符，回显字符中显示控制字符，回显模式显示被擦除行的字符
-                         0, // 线路模式为NULL 
-                         INIT_C_CC}, // 标准控制字符数组
-                        0, // 初始进程组为0
-                        0,	// 初始停止标志为0
-                        con_write, // 写控制终端函数指针为con_write(console.c中)
-                        {0,0,0,0,""},	//控制台终端读缓冲队列（含有0个字符，头指针偏移为0, 尾指针偏移为0, 等待进程队列为NULL）
-                        {0,0,0,0,""},	//控制台终端写缓冲队列（含有0个字符，头指针偏移为0, 尾指针偏移为0, 等待进程队列为NULL）	
-                        {0,0,0,0,""}	//控制台终端辅助缓冲队列（含有0个字符，头指针偏移为0, 尾指针偏移为0, 等待进程队列为NULL）	
-                },
-                // 串行口1终端
-                {
-                        // 终端属性
-                        {0, // 输入不做转换
-                         0,  // 输出不做转换
-                         B2400 | CS8, // 控制模式：波特率2400，每个字符8位（1个字节）
-                         0, // 本地模式为NULL
-                         0, // 线路模式为NULL 
-                         INIT_C_CC}, // 标准控制字符数组
-                        0, // 初始进程组为0
-                        0, // 初始停止标志为0
-                        rs_write, // 串行中断写函数指针rs_write(serial.c中)
-                        {0x3f8,0,0,0,""},	// 串行口1终端读缓冲队列（串行口1寄存器端口基地址0x3f8，头指针偏移为0, 尾指针偏移为0, 等待进程队列为NULL）
-                        {0x3f8,0,0,0,""}, // 串行口1终端写缓冲队列（串行口1寄存器端口基地址0x3f8，头指针偏移为0, 尾指针偏移为0, 等待进程队列为NULL）
-                        {0,0,0,0,""} // 串行口1终端辅助缓冲队列（含有0个字符，头指针偏移为0, 尾指针偏移为0, 等待进程队列为NULL）
-                },
-                // 串行口2终端：除了串行口2的端口基地址(0x2f8)不同，其余和上面串行口1类似
-                {
-                        {0, /* no translation */
-                         0,  /* no translation */
-                         B2400 | CS8,
-                         0,
-                         0,
-                         INIT_C_CC},
-                        0,
-                        0,
-                        rs_write,
-                        {0x2f8,0,0,0,""},		/* rs 2 */
-                        {0x2f8,0,0,0,""},
-                        {0,0,0,0,""}
-                }
-        };
+struct tty_struct tty_table[] = {
+        // 控制台终端
+        {
+                // 终端属性
+                {ICRNL,		// 输入时把回车符CR转换成换行符NL 
+                 OPOST|ONLCR,	 // 把换行符NL作为回车符CR输出，并且执行输出处理
+                 0, // 控制模式为NULL（没有波特率等传输信息）
+                 ISIG | ICANON | ECHO | ECHOCTL | ECHOKE, // 本地模式标志: 相应信号，规范模式，回显字符，回显字符中显示控制字符，回显模式显示被擦除行的字符
+                 0, // 线路模式为NULL 
+                 INIT_C_CC}, // 标准控制字符数组
+                0, // 初始进程组为0
+                0,	// 初始停止标志为0
+                con_write, // 写控制终端函数指针为con_write(console.c中)
+                {0,0,0,0,""},	//控制台终端读缓冲队列（含有0个字符，头指针偏移为0, 尾指针偏移为0, 等待进程队列为NULL）
+                {0,0,0,0,""},	//控制台终端写缓冲队列（含有0个字符，头指针偏移为0, 尾指针偏移为0, 等待进程队列为NULL）	
+                {0,0,0,0,""}	//控制台终端辅助缓冲队列（含有0个字符，头指针偏移为0, 尾指针偏移为0, 等待进程队列为NULL）	
+        },
+        // 串行口1终端
+        {
+                // 终端属性
+                {0, // 输入不做转换
+                 0,  // 输出不做转换
+                 B2400 | CS8, // 控制模式：波特率2400，每个字符8位（1个字节）
+                 0, // 本地模式为NULL
+                 0, // 线路模式为NULL 
+                 INIT_C_CC}, // 标准控制字符数组
+                0, // 初始进程组为0
+                0, // 初始停止标志为0
+                rs_write, // 串行中断写函数指针rs_write(serial.c中)
+                {0x3f8,0,0,0,""},	// 串行口1终端读缓冲队列（串行口1寄存器端口基地址0x3f8，头指针偏移为0, 尾指针偏移为0, 等待进程队列为NULL）
+                {0x3f8,0,0,0,""}, // 串行口1终端写缓冲队列（串行口1寄存器端口基地址0x3f8，头指针偏移为0, 尾指针偏移为0, 等待进程队列为NULL）
+                {0,0,0,0,""} // 串行口1终端辅助缓冲队列（含有0个字符，头指针偏移为0, 尾指针偏移为0, 等待进程队列为NULL）
+        },
+        // 串行口2终端：除了串行口2的端口基地址(0x2f8)不同，其余和上面串行口1类似
+        {
+                {0, /* no translation */
+                 0,  /* no translation */
+                 B2400 | CS8,
+                 0,
+                 0,
+                 INIT_C_CC},
+                0,
+                0,
+                rs_write,
+                {0x2f8,0,0,0,""},		/* rs 2 */
+                {0x2f8,0,0,0,""},
+                {0,0,0,0,""}
+        }
+};
 
 /*
  * these are the tables used by the machine code handlers.
@@ -304,106 +304,143 @@ void copy_to_cooked(struct tty_struct * tty)
         wake_up(&tty->secondary.proc_list); // 唤醒等待“该辅助队列为空”的其他进程（如果有的话）
 }
 
+
+/**
+ * tty读函数：从终端辅助队列读取指定数量的字符，放到用户指定的缓冲区中
+ *
+ * channel: 子设备号
+ * buf: 用户缓冲区指针
+ * nr: 欲读字节数
+ *
+ * 成功：返回读取到的字符数，失败：返回错误号
+ * 
+ */
 int tty_read(unsigned channel, char * buf, int nr)
 {
         struct tty_struct * tty;
-        char c, * b=buf;
+        char c, *b=buf;
         int minimum,time,flag=0;
         long oldalarm;
 
-        if (channel>2 || nr<0) return -1;
-        tty = &tty_table[channel];
-        oldalarm = current->alarm;
-        time = 10L*tty->termios.c_cc[VTIME];
-        minimum = tty->termios.c_cc[VMIN];
-        if (time && !minimum) {
-                minimum=1;
-                if ((flag=(!oldalarm || time+jiffies<oldalarm)))
-                        current->alarm = time+jiffies;
+        if (channel>2 || nr<0) return -1; // 终端子设备号 或 欲读字节数 非法，直接返回-1
+        tty = &tty_table[channel]; // 获取对应的终端结构指针
+        oldalarm = current->alarm; // 获得当前进程的报警定时值（滴答数）
+        time = 10L*tty->termios.c_cc[VTIME]; // 计算读操作超时定时值（单位：滴答数，而VTIME是一个1/10秒计数计时值）
+        minimum = tty->termios.c_cc[VMIN]; // 获得至少要读的字符数
+        if (time && !minimum) { // 设置了读操作超时值，并且没有设置最少要读的字符数
+                minimum=1; // 设置至少要读一个字符
+                // 这里设置是否要超时的flag
+                if ((flag=(!oldalarm || time+jiffies<oldalarm))) // 当前报警定时值为空 或 读超时的时间比报警定时要早
+                        current->alarm = time+jiffies; // 设置当前进程的报警定时为读操作超时时刻
         }
-        if (minimum>nr)
-                minimum=nr;
+        if (minimum>nr) // 至少要读的字符数 > 想要读的字符数
+                minimum=nr; // 设置最小要读的字符为“想要读的字符数”
+        // 现在开始从辅助队列读取字符并放到要读用户缓冲区中。当预读的字符数 > 0，则执行下面循环
         while (nr>0) {
-                if (flag && (current->signal & ALRMMASK)) {
-                        current->signal &= ~ALRMMASK;
-                        break;
+                if (flag && (current->signal & ALRMMASK)) { // 允许超时 并且 进程信号位图ALARM位已经置位（收到一个定时报警信号）
+                        current->signal &= ~ALRMMASK; // 复位进程信号位图中的定时报警位
+                        break; // 超时，中断循环
                 }
-                if (current->signal)
-                        break;
+                if (current->signal) // 有信号要处理
+                        break; // 中断循环
+                // 下面情况下：当前进程进入可中断的休眠状态：
+                // 1. 终端辅助队列已经空
+                // 2. 处于规范模式下 并且 辅助队列的数据不满一行 并且 辅助队列的空闲字节数 > 20 
                 if (EMPTY(tty->secondary) || (L_CANON(tty) &&
                                               !tty->secondary.data && LEFT(tty->secondary)>20)) {
-                        sleep_if_empty(&tty->secondary);
-                        continue;
+                        sleep_if_empty(&tty->secondary); // 当前进程进入可中断的睡眠状态
+                        continue; // 从头开始执行循环
                 }
                 do {
-                        GETCH(tty->secondary,c);
-                        if (c==EOF_CHAR(tty) || c==10)
-                                tty->secondary.data--;
-                        if (c==EOF_CHAR(tty) && L_CANON(tty))
-                                return (b-buf);
+                        GETCH(tty->secondary,c); // 从辅助队列读取一个字符到变量c
+                        if (c==EOF_CHAR(tty) || c==10) // 该字符是文件结束字符(^D)或换行符(NL:10)
+                                tty->secondary.data--; // 辅助队列的行数递减1
+                        if (c==EOF_CHAR(tty) && L_CANON(tty)) // 如果该字符是文件结束符(^D)并且处于规范模式下
+                                return (b-buf); // 返回实际读取的字节数
                         else {
-                                put_fs_byte(c,b++);
-                                if (!--nr)
-                                        break;
+                                put_fs_byte(c,b++); // 把读取到的字符放入到用户缓冲区中，对应的缓冲区指针b向前移动一个字节
+                                if (!--nr) // 想要读取的字节数 - 1，并判断是否大于0
+                                        break; // 如果等于0：已经全部读取完毕，中断当前循环
                         }
-                } while (nr>0 && !EMPTY(tty->secondary));
-                if (time && !L_CANON(tty)) {
-                        if ((flag=(!oldalarm || time+jiffies<oldalarm)))
-                                current->alarm = time+jiffies;
+                } while (nr>0 && !EMPTY(tty->secondary)); // 想读取的字节数 > 0 并且辅助队列不为空，继续这个循环
+
+                // 执行到这里，有两种情况：
+                // 1. 读完所有的字节数
+                // 2. 辅助队列已空
+                if (time && !L_CANON(tty)) { // 有超时值 并且 非规范模式下
+                        // 这里再次设置是否超时的flag值
+                        // 注意：实际上这里是为了处理辅助队列为空，让其他进程有时间写入辅助读列。但这里的逻辑比较混乱，后面版本重写过超时的逻辑
+                        if ((flag=(!oldalarm || time+jiffies<oldalarm))) // 当前报警定时值为空 或 读超时的时间比报警定时要早
+                                current->alarm = time+jiffies; // 设置当前进程的报警定时为读操作超时时刻
                         else
-                                current->alarm = oldalarm;
+                                current->alarm = oldalarm; // 当前进程的报警定时恢复为原来设置的报警定时
                 }
-                if (L_CANON(tty)) {
-                        if (b-buf)
-                                break;
-                } else if (b-buf >= minimum)
-                        break;
+                if (L_CANON(tty)) { // 规范模式
+                        if (b-buf) // 已经读取了至少一个字符
+                                break; // 中断最外层循环
+                } else if (b-buf >= minimum) // 非规范模式下，读取的字符数超过了最少要读的字符数
+                        break; // 中断最外层循环
         }
-        current->alarm = oldalarm;
-        if (current->signal && !(b-buf))
-                return -EINTR;
-        return (b-buf);
+        current->alarm = oldalarm; // 当前进程的报警定时恢复为原来设置的报警定时
+        if (current->signal && !(b-buf)) // 已经捕获到信号 并且 没有读取到任何的字符
+                return -EINTR; // 返回 EINTR（被信号中断）做为错误值
+        return (b-buf); // 返回已经读取到的字符数
 }
 
+/**
+ * 写终端函数：把用户缓冲区的字符写入到指定的终端去
+ *
+ * channel: 子设备号
+ * buf: 用户缓冲区指针
+ * nr: 欲写的字节数
+ *
+ * 成功：返回写入的字符数，失败：返回错误号
+ * 
+ */
 int tty_write(unsigned channel, char * buf, int nr)
 {
-        static int cr_flag = 0;
+        static int cr_flag = 0; // 回车处理标志
         struct tty_struct *tty;
         char c, *b=buf;
 
-        if (channel>2 || nr<0)
+        if (channel>2 || nr<0) // 终端子设备号 或 欲写字节数 非法，直接返回-1
                 return -1;
-        tty = channel + tty_table;
-        while (nr>0) {
-                sleep_if_full(&tty->write_q);
-                if (current->signal)
-                        break;
-                while (nr>0 && !FULL(tty->write_q)) {
-                        c = get_fs_byte(b);
-                        if (O_POST(tty)) {
-                                if (c == '\r' && O_CRNL(tty))
-                                        c='\n';
-                                else if (c=='\n' && O_NLRET(tty))
-                                        c='\r';
-                                else if (c=='\n' && !cr_flag && O_NLCR(tty)) {
-                                        cr_flag = 1;
-                                        PUTCH(13,tty->write_q);
-                                        continue;
-                                } else if (O_LCUC(tty))
-                                        c=toupper(c);
+        tty = channel + tty_table; // 获得对应的终端结构指针
+        // 开始从用户缓冲区中读取字符放入到终端写队列的循环
+        while (nr>0) { // 要写的字节数 > 0 
+                sleep_if_full(&tty->write_q); // 如果终端写队列满了，则当前进程进入可中断的睡眠状态 
+                if (current->signal) // 当前进程有信号要处理
+                        break; // 直接退出最外层循环
+                while (nr>0 && !FULL(tty->write_q)) { // 还有要写的字节 并且 终端写队列不满
+                        c = get_fs_byte(b); // 从用户缓冲区读取一个字符到变量c
+                        if (O_POST(tty)) { // 执行输出处理
+                                if (c == '\r' && O_CRNL(tty)) // 字符是回车符(CR:13) 并且 把回车符CR转换成换行符NL输出
+                                        c='\n'; // 转换成换行符(NL:10)
+                                else if (c=='\n' && O_NLRET(tty)) // 字符是换行符(NL:10) 并且 换行符NL是否执行回车的功能 
+                                        c='\r'; // 转换成回车符(CR:13)
+                                else if (c=='\n' && !cr_flag && O_NLCR(tty)) { // 字符是换行符(NL:10) 并且 回车标志没有置位 并且 把换行符NL转换成回车符CR输出
+                                        cr_flag = 1; // 置位回车标志
+                                        PUTCH(13,tty->write_q); // 向终端写队列多写入一个回车符(CR:13)
+                                        continue; // 处理下一个字符：此时的回车标志处于被置位中！
+                                } else if (O_LCUC(tty)) // 转换小写字符为大写字符输出
+                                        c=toupper(c); // 转换成大写字符
                         }
-                        b++; nr--;
-                        cr_flag = 0;
-                        PUTCH(c,tty->write_q);
+                        b++; nr--; // 用户缓冲区指针前移，要写的字节数 - 1
+                        cr_flag = 0; // 复位回车标志
+                        PUTCH(c,tty->write_q); // 把字符写入到终端写队列中
                 }
-                
-                tty->write(tty);
 
-                if (nr>0)
-                        schedule();
+                // 执行到这里： 有2种情况：
+                // 1. 要写的字节已经全部写到终端的写队列中了
+                // 2. 终端的写缓冲队列已经满了
+                
+                // 无论哪种情况，都先把终端写队列中当前的字符序列输出到真正的终端设备去
+                tty->write(tty); // 控制台：调用con_write()，串行口：调用rs_write()
+                if (nr>0) // 如果还有要写的字符：说明终端写队列已满
+                        schedule(); // 调度其他任务，等待上面的输出操作使得写队列不满
         }
         
-        return (b - buf);
+        return (b - buf); // 返回写成功的字节数
 }
 
 /*
