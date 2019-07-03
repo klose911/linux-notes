@@ -104,7 +104,7 @@ struct termio {
 #define NCCS 17 // terminos结构中的控制字符数组的长度
 
 /**
- * POSIX中的terminos结构
+ * POSIX中的termios结构
  * 
  * 此结构和termio完全类似，只是控制字符数组的长度不同
  * 
