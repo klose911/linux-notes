@@ -188,6 +188,17 @@ static int set_termio(struct tty_struct * tty, struct termio * termio)
         return 0; // 成功：返回0
 }
 
+
+/**
+ * 终端输入输出控制：被fs/ioctl.c中的sys_ioctl()函数所调用
+ *
+ * dev：终端次设备号
+ * cmd：功能
+ * arg：可选参数
+ *
+ * 成功：返回值依赖于cmd，失败：返回对应的错误码
+ * 
+ */
 int tty_ioctl(int dev, int cmd, int arg)
 {
         struct tty_struct * tty;
@@ -199,82 +210,82 @@ int tty_ioctl(int dev, int cmd, int arg)
                 dev=MINOR(dev);
         tty = dev + tty_table;
         switch (cmd) {
-		case TCGETS:
+		case TCGETS: // 获取终端信息：保存到arg指针指向的用户进程内存处
                 return get_termios(tty,(struct termios *) arg);
-		case TCSETSF:
+		case TCSETSF: // 设置终端之前，需要先等待输出队列中的数据处理完毕，并且刷新（清空）输入队列
                 flush(&tty->read_q); /* fallthrough */
-		case TCSETSW:
+		case TCSETSW: // 设置终端之前，需要先等待输出队列中的数据处理完毕
                 wait_until_sent(tty); /* fallthrough */
-		case TCSETS:
+		case TCSETS: // 根据用户进程内存中的termios结构(arg指向这个结构)中的信息来设置相应终端信
                 return set_termios(tty,(struct termios *) arg);
-		case TCGETA:
+		case TCGETA: // 或取相应终端信息：保存到arg指针指向的用户进程内存处（保存为termio结构格式）
                 return get_termio(tty,(struct termio *) arg);
-		case TCSETAF:
+		case TCSETAF: // 设置termio结构中的信息之前，需要先等待输出队列中的数据处理完毕，并且刷新（清空）输入队列
                 flush(&tty->read_q); /* fallthrough */
-		case TCSETAW:
+		case TCSETAW: // 设置termio结构中的信息之前，需要先等待输出队列中的数据处理完毕
                 wait_until_sent(tty); /* fallthrough */
-		case TCSETA:
+		case TCSETA: // 根据用户进程内存中的termio结构(arg指向这个结构)中的信息来设置相应终端信息
                 return set_termio(tty,(struct termio *) arg);
-		case TCSBRK:
+		case TCSBRK: // 待输出队列数据处理完毕，若参数值是0,则发送一个break字符
                 if (!arg) {
                         wait_until_sent(tty);
                         send_break(tty);
                 }
                 return 0;
-		case TCXONC:
-                return -EINVAL; /* not implemented */
-		case TCFLSH:
-                if (arg==0)
+		case TCXONC: // 开始/停止控制：如果参数是0,则挂起输出，如果参数是1,则重新开启挂起的输出，如果是2,则挂起输入，如果是3,则重启开启挂起的输入
+                return -EINVAL; // 未实现
+		case TCFLSH: // 刷新已写输出但还没发送或已收但还没有读的数据
+                if (arg==0) // 如果参数是0,则刷新输入队列
                         flush(&tty->read_q);
-                else if (arg==1)
+                else if (arg==1) // 如果参数是1,则刷新输出队列
                         flush(&tty->write_q);
-                else if (arg==2) {
+                else if (arg==2) { // 如果参数是2,则刷新输入和输出队列
                         flush(&tty->read_q);
                         flush(&tty->write_q);
                 } else
-                        return -EINVAL;
+                        return -EINVAL; // 参数无效
                 return 0;
-		case TIOCEXCL:
+		case TIOCEXCL: // 设置终端串行线路专用模式，未实现
                 return -EINVAL; /* not implemented */
-		case TIOCNXCL:
+		case TIOCNXCL: // 复位终端串行线路专用模式，未实现
                 return -EINVAL; /* not implemented */
-		case TIOCSCTTY:
+		case TIOCSCTTY: // 设置tty为控制终端，未实现
                 return -EINVAL; /* set controlling term NI */
-		case TIOCGPGRP:
-                verify_area((void *) arg,4);
-                put_fs_long(tty->pgrp,(unsigned long *) arg);
+		case TIOCGPGRP: // 读取指定终端设备的进程组ID到用户进程的内存中
+                verify_area((void *) arg,4); // 验证用户进程内存是否足够，不够则分配新页面
+                put_fs_long(tty->pgrp,(unsigned long *) arg); // 进程的进程组ID写入到用户进程的内存去
                 return 0;
-		case TIOCSPGRP:
-                tty->pgrp=get_fs_long((unsigned long *) arg);
+		case TIOCSPGRP: // 设置指定终端设备的进程组ID
+                tty->pgrp=get_fs_long((unsigned long *) arg); // 从用户进程的内存区复制进程组ID到终端pgrp域
                 return 0;
-		case TIOCOUTQ:
+		case TIOCOUTQ: // 返回输出队列还没送出的字符数给用户进程
                 verify_area((void *) arg,4);
                 put_fs_long(CHARS(tty->write_q),(unsigned long *) arg);
                 return 0;
-		case TIOCINQ:
+		case TIOCINQ: // 返回输入队列中还未取走的字符给用户进程
                 verify_area((void *) arg,4);
                 put_fs_long(CHARS(tty->secondary),
                             (unsigned long *) arg);
                 return 0;
-		case TIOCSTI:
-                return -EINVAL; /* not implemented */
-		case TIOCGWINSZ:
-                return -EINVAL; /* not implemented */
-		case TIOCSWINSZ:
-                return -EINVAL; /* not implemented */
-		case TIOCMGET:
-                return -EINVAL; /* not implemented */
-		case TIOCMBIS:
-                return -EINVAL; /* not implemented */
-		case TIOCMBIC:
-                return -EINVAL; /* not implemented */
-		case TIOCMSET:
-                return -EINVAL; /* not implemented */
-		case TIOCGSOFTCAR:
-                return -EINVAL; /* not implemented */
-		case TIOCSSOFTCAR:
-                return -EINVAL; /* not implemented */
-		default:
-                return -EINVAL;
+		case TIOCSTI: // 模拟终端输入：该命令以一个指向字符的指针作为参数，并假装该字符是在终端键入的。用户必须在该控制终端上具有超级用户权限或具有读权限
+                return -EINVAL; // 未实现
+		case TIOCGWINSZ: // 读取终端设备窗口大小
+                return -EINVAL; // 未实现
+		case TIOCSWINSZ: // 设置终端设备窗口大小
+                return -EINVAL; // 未实现
+		case TIOCMGET: // 返回modem状态控制引线的当前状态比特位标志集
+                return -EINVAL; // 未实现
+		case TIOCMBIS: // 设置单个modem状态控制引线的状态（true或false）
+                return -EINVAL; // 未实现
+		case TIOCMBIC: // 复位单个modem状态控制引线的状态
+                return -EINVAL; // 未实现
+		case TIOCMSET: // 设置modem状态控制引线的当前状态比特位标志集。如果某一比特位被置位，则modem对应的状态引线将会设置为有效
+                return -EINVAL; // 未实现
+		case TIOCGSOFTCAR: // 读取软件载波检测标志（1：开启，0：关闭）
+                return -EINVAL; // 未实现
+		case TIOCSSOFTCAR: // 设置软件载波检测标志
+                return -EINVAL; // 未实现
+		default: // 命令无效
+                return -EINVAL; // 返回错误号： EINVAL
         }
 }
