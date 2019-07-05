@@ -202,13 +202,16 @@ static int set_termio(struct tty_struct * tty, struct termio * termio)
 int tty_ioctl(int dev, int cmd, int arg)
 {
         struct tty_struct * tty;
-        if (MAJOR(dev) == 5) {
-                dev=current->tty;
-                if (dev<0)
-                        panic("tty_ioctl: dev<0");
-        } else
-                dev=MINOR(dev);
-        tty = dev + tty_table;
+        // 计算终端结构表中对应数据项的下标
+        if (MAJOR(dev) == 5) { // 主设备号等于5：对应的是控制台终端设备
+                // 当前版本因为只支持控制台终端，所以这里只可能0或-1
+                dev=current->tty; // 获得当前进程的终端号，实际是0（终端结构数据表中对应控制台终端的数据项的下标）
+                if (dev<0) // 当前进程没有使用控制台终端（比如守护进程）
+                        panic("tty_ioctl: dev<0"); // 报错，死机
+        } else // 串行口终端
+                dev=MINOR(dev); // 获得次设备号，次设备号可能是1或 2，分别代表了串行口1和2的终端，因此dev也匹配终端结构数据表中对应串行口的数据项的下标
+        tty = dev + tty_table; // 获得要操作的终端结构
+        
         switch (cmd) {
 		case TCGETS: // 获取终端信息：保存到arg指针指向的用户进程内存处
                 return get_termios(tty,(struct termios *) arg);
