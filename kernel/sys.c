@@ -242,32 +242,62 @@ int sys_setuid(int uid)
         return(sys_setreuid(uid, uid));
 }
 
+
+/**
+ * 设置系统开机时间
+ *
+ * tptr: 从1970年1月1日00:00:00GMT开始计时的时间值（秒），在用户进程的内存空间中
+ *
+ * 成功：返回0，失败：返回错误号
+ * 
+ */
 int sys_stime(long * tptr)
 {
-        if (!suser())
-                return -EPERM;
+        if (!suser()) // 当前进程没有管理员权限
+                return -EPERM; // 返回 EPERM（没有权限）
+        // jiffies/HZ：是开机到目前为止的秒数，根据用户想要设置的当前时间来调整开机时间startup_time
         startup_time = get_fs_long((unsigned long *)tptr) - jiffies/HZ;
-        return 0;
+        return 0; // 返回0：表示执行成功
 }
 
+/**
+ * 获取当前进程运行时间统计
+ *
+ * tbuf: 用户进程空间中tms结构指针
+ *
+ * 返回：开机到现在的滴答数
+ * 
+ */
 int sys_times(struct tms * tbuf)
 {
-        if (tbuf) {
-                verify_area(tbuf,sizeof *tbuf);
-                put_fs_long(current->utime,(unsigned long *)&tbuf->tms_utime);
-                put_fs_long(current->stime,(unsigned long *)&tbuf->tms_stime);
-                put_fs_long(current->cutime,(unsigned long *)&tbuf->tms_cutime);
-                put_fs_long(current->cstime,(unsigned long *)&tbuf->tms_cstime);
+        if (tbuf) { 
+                verify_area(tbuf,sizeof *tbuf); // 检查用户进程的内存页是否有足够的空间保存tbuf结构，如果没有，则分配新的内存页
+                put_fs_long(current->utime,(unsigned long *)&tbuf->tms_utime); // 拷贝当前进程用户态运行时间（滴答数）到用户进程的内存空间
+                put_fs_long(current->stime,(unsigned long *)&tbuf->tms_stime); // 拷贝当前进程内核态运行时间（滴答数）到用户进程的内存空间
+                put_fs_long(current->cutime,(unsigned long *)&tbuf->tms_cutime); // 拷贝当前进程的子进程总用户态运行时间（滴答数）到用户进程的内存空间
+                put_fs_long(current->cstime,(unsigned long *)&tbuf->tms_cstime); // 拷贝当前进程的子进程总内核态运行时间（滴答数）到用户进程的内存空间
         }
-        return jiffies;
+        return jiffies; // 返回开机到现在的滴答数
 }
 
+
+/**
+ * 设置当前进程数据段结束处的偏移
+ *
+ * end_data_seg: 想要设置的进程数据段末尾处偏移
+ *
+ * 返回：如果参数有效，返回设置后的进程数据段末尾处的偏移(end_data_seg)，反之：返回进程当前的数据段末尾处偏移
+ *
+ * 注意：这个系统调用一般只由libc库函数调用
+ * 
+ */
 int sys_brk(unsigned long end_data_seg)
 {
+        // 想要设置的偏移 >= 代码段长度 并且 想要设置的偏移值 < (栈段起始处 - 16KB) : 说明end_data_seg值是合理的
         if (end_data_seg >= current->end_code &&
             end_data_seg < current->start_stack - 16384)
-                current->brk = end_data_seg;
-        return current->brk;
+                current->brk = end_data_seg; // 设置进程数据段末尾处的偏移
+        return current->brk; // 返回进程数据段末尾处的偏移
 }
 
 /*
@@ -275,59 +305,105 @@ int sys_brk(unsigned long end_data_seg)
  * I just haven't get the stomach for it. I also don't fully
  * understand sessions/pgrp etc. Let somebody who does explain it.
  */
+
+/**
+ * 设置指定进程pid的进程组号pgid
+ *
+ * pid: 进程ID
+ * pgid: 要设置的进程组ID
+ *
+ * 成功：返回0，失败：返回错误号
+ * 
+ */
 int sys_setpgid(int pid, int pgid)
 {
         int i;
 
-        if (!pid)
-                pid = current->pid;
-        if (!pgid)
-                pgid = current->pid;
+        if (!pid) // pid == 0 
+                pid = current->pid; // 处理当前进程
+        if (!pgid) // pgid == 0
+                pgid = current->pid; // 要设置的进程组号为当前进程ID
+        // 遍历所有进程，寻找要设置进程号 == pid 的进程
         for (i=0 ; i<NR_TASKS ; i++)
                 if (task[i] && task[i]->pid==pid) {
-                        if (task[i]->leader)
-                                return -EPERM;
-                        if (task[i]->session != current->session)
-                                return -EPERM;
-                        task[i]->pgrp = pgid;
-                        return 0;
+                        if (task[i]->leader) // 已经设置了进程组ID
+                                return -EPERM; // 返回 EPERM（没有权限） 
+                        if (task[i]->session != current->session) // 该进程的会话号 != 当前进程的会话号：要设置的进程和当前进程不在一个会话中
+                                return -EPERM; // 返回 EPERM（没有权限）
+                        task[i]->pgrp = pgid; // 用pgid来设置该进程的进程组ID
+                        return 0; // 返回0：表示执行成功
                 }
-        return -ESRCH;
+        return -ESRCH; // 无法找到要设置的进程，返回ESRCH错误号
 }
 
+/**
+ * 获取当前进程的进程组ID
+ *
+ * 无参数
+ *
+ * 返回：当前进程的进程组ID
+ * 
+ */
 int sys_getpgrp(void)
 {
         return current->pgrp;
 }
 
+/**
+ * 创建一个会话
+ *
+ * 无参数
+ *
+ * 成功：返回当前进程的会话号，失败：返回错误号
+ * 
+ */
 int sys_setsid(void)
 {
-        if (current->leader && !suser())
-                return -EPERM;
-        current->leader = 1;
-        current->session = current->pgrp = current->pid;
-        current->tty = -1;
-        return current->pgrp;
+        if (current->leader && !suser()) // 当前进程已经在一个会话中 并且 当前进程没有管理员权限
+                return -EPERM; // 返回 EPERM（没有权限）
+        current->leader = 1; // 设置当前进程处于会话中
+        current->session = current->pgrp = current->pid; // 设置当前进程的会话号和进程组号为当前进程的进程ID
+        current->tty = -1; // 设置当前进程无控制终端
+        return current->pgrp; // 返回当前进程的会话号（会话号和进程组ID都等与当前进程的进程ID）
 }
 
+/**
+ * 获取操作系统名称，版本等信息
+ *
+ * name: 用户进程的内存中的utsname结构指针
+ *
+ * 成功：返回0，失败：返回错误号
+ *
+ */
 int sys_uname(struct utsname * name)
 {
+        // 要复制的操作系统信息值
+        // 注意：这里是写死的，后面版本把这些信息放在了config.h头文件中
         static struct utsname thisname = {
                 "linux .0","nodename","release ","version ","machine "
         };
         int i;
 
-        if (!name) return -ERROR;
-        verify_area(name,sizeof *name);
+        if (!name) // name指针的地址无效
+                return -ERROR;
+        verify_area(name,sizeof *name); // 校验用户进程的内存页是否有足够的空间保存一个utsname结构
         for(i=0;i<sizeof *name;i++)
-                put_fs_byte(((char *) &thisname)[i],i+(char *) name);
-        return 0;
+                put_fs_byte(((char *) &thisname)[i],i+(char *) name); // 复制对应的信息到用户进程的内存空间中去
+        return 0; // 返回0：表示执行成功
 }
 
+/**
+ * 设置当前进程的创建文件属性的屏蔽码
+ *
+ * mask: 文件属性屏蔽码
+ *
+ * 返回：原屏蔽码
+ * 
+ */
 int sys_umask(int mask)
 {
-        int old = current->umask;
+        int old = current->umask; // 当前进程的创建文件属性的屏蔽码
 
-        current->umask = mask & 0777;
-        return (old);
+        current->umask = mask & 0777; // 设置当前进程的创建文件属性的屏蔽码为 (mask & 0777)
+        return (old); // 返回原屏蔽码
 }

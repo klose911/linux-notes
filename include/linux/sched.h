@@ -103,7 +103,7 @@ struct task_struct {
         int exit_code; // 任务执行停止的退出码，父进程会取
         // 代码段地址（线性地址），代码段长度（字节数），代码段长度 + 数据段长度（字节数），堆结束指针，栈开始指针
         unsigned long start_code,end_code,end_data,brk,start_stack;
-        // 进程号，父进程号，进程组号，会话号，会话首领的进程号
+        // 进程号，父进程号，进程组号，会话号，当前进程是否处于一个会话中
         long pid,father,pgrp,session,leader;
         // 用户标识号，有效用户标识号，保存的用户标识号
         unsigned short uid,euid,suid;
