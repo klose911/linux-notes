@@ -117,7 +117,7 @@ extern struct task_struct * wait_for_request; // 等待空闲请求项的进程�
 #define DEVICE_ON(device) // 开启设备
 #define DEVICE_OFF(device) // 关闭设备
 
-#elif
+#else
 /* unknown blk device */
 // 否则在编译预处理阶段显示出错信息：”未知块设备“
 #error "unknown blk device" 

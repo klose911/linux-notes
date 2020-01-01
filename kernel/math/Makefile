@@ -10,10 +10,10 @@ AR	=ar
 AS	=as --32
 LD	=ld
 LDFLAGS	=-s -x -m elf_i386
-CC	=gcc -march=i386 -m32
+CC	=/usr/pkg/gcc44/bin/gcc -march=i386 -m32
 CFLAGS	=-Wall -fno-stack-protector -O -fstrength-reduce -fomit-frame-pointer -fno-stack-protector \
 	-finline-functions -nostdinc -I../../include
-CPP	=gcc -E -nostdinc -I../../include
+CPP	=/usr/pkg/gcc44/bin/gcc -E -nostdinc -I../../include
 
 .c.s:
 	$(CC) $(CFLAGS) \

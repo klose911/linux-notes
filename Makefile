@@ -10,10 +10,10 @@ LD86	=ld86 -0
 AS	=as --32
 LD	=ld
 LDFLAGS	=-m elf_i386 -Ttext 0 -e startup_32
-CC	=gcc -march=i386 $(RAMDISK)
+CC	=/usr/pkg/gcc44/bin/gcc -march=i386 $(RAMDISK)
 CFLAGS	=-Wall -m32 -O -fomit-frame-pointer -fno-builtin -fno-stack-protector 
 
-CPP	=cpp -nostdinc -Iinclude
+CPP	=/usr/pkg/gcc44/cpp -nostdinc -Iinclude
 
 #
 # ROOT_DEV specifies the default root-device when making the image.
@@ -41,7 +41,7 @@ all:	Image
 Image: boot/bootsect boot/setup tools/system tools/build
 	objcopy -O binary -R .note -R .comment tools/system tools/kernel
 	tools/build boot/bootsect boot/setup tools/kernel $(ROOT_DEV) > Image
-	rm tools/kernel -f
+	rm -f tools/kernel
 	sync
 
 disk: Image

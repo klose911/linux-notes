@@ -1,11 +1,11 @@
-CC	=gcc -march=i386
+CC	=/usr/pkg/gcc44/bin/gcc -march=i386
 #CFLAGS	=-Wall -O -fstrength-reduce -fomit-frame-pointer \
 	-finline-functions -nostdinc -I../include
 CFLAGS	=-Wall -m32 -O -fstrength-reduce -fomit-frame-pointer -fno-stack-protector -nostdinc -I../include
 AS	=as --32
 AR	=ar
 LD	=ld -m elf_i386
-CPP	=gcc -E -nostdinc -I../include
+CPP	=/usr/pkg/gcc44/bin/gcc -E -nostdinc -I../include
 
 .c.o:
 	$(CC) $(CFLAGS) \
